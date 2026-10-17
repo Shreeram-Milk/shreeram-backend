@@ -34,6 +34,27 @@ describe('environment', () => {
     expect(loadEnv({ MAIL_MODE: 'smtp', SMTP_HOST: 'h', SMTP_USER: 'u', SMTP_PASS: 'p', MAIL_FROM: 'f' }).SMTP_PORT).toBe(587)
     expect(() => loadEnv({ MAIL_MODE: 'ses' })).toThrow(/MAIL_MODE/)
   })
+  it('keeps the PhonePe sandbox out of production unless ALLOW_SANDBOX_PAYMENTS=true says so on purpose', () => {
+    const production = { ...valid, NODE_ENV: 'production', CORS_ORIGINS: 'https://admin.example.com', AUTH_SECRET: 'x'.repeat(40), PUSH_MODE: 'fcm', FIREBASE_SERVICE_ACCOUNT_FILE: '/run/secrets/firebase.json', MAIL_MODE: 'smtp', SMTP_HOST: 'smtp.example.com', SMTP_USER: 'u', SMTP_PASS: 'p', MAIL_FROM: 'ShreeRam <a@b.co>', AWS_REGION: 'ap-south-1', S3_MEDIA_BUCKET: 'media-bucket', PHONEPE_CLIENT_ID: 'id', PHONEPE_CLIENT_SECRET: 'secret', PHONEPE_MERCHANT_ID: 'M1', PHONEPE_WEBHOOK_USERNAME: 'hook', PHONEPE_WEBHOOK_PASSWORD: 'pass' }
+    // Local development with the sandbox: fine, no flag needed.
+    expect(loadEnv({ ...valid, PHONEPE_ENV: 'sandbox' }).PHONEPE_ENV).toBe('sandbox')
+    // AWS testing: production mode with the sandbox, only with the explicit flag.
+    expect(() => loadEnv({ ...production, PHONEPE_ENV: 'sandbox' })).toThrow(/ALLOW_SANDBOX_PAYMENTS/)
+    const uat = loadEnv({ ...production, PHONEPE_ENV: 'sandbox', ALLOW_SANDBOX_PAYMENTS: 'true' })
+    expect([uat.NODE_ENV, uat.PHONEPE_ENV, uat.ALLOW_SANDBOX_PAYMENTS]).toEqual(['production', 'sandbox', true])
+    // The flag does not weaken anything else: credentials, database, secrets and TLS are still required.
+    const uatSettings = { ...production, PHONEPE_ENV: 'sandbox', ALLOW_SANDBOX_PAYMENTS: 'true' }
+    expect(() => loadEnv({ ...uatSettings, PHONEPE_CLIENT_ID: undefined, PHONEPE_CLIENT_SECRET: undefined, PHONEPE_MERCHANT_ID: undefined })).toThrow(/PHONEPE_CLIENT_ID: is required/)
+    expect(() => loadEnv({ ...uatSettings, PHONEPE_WEBHOOK_USERNAME: undefined, PHONEPE_WEBHOOK_PASSWORD: undefined })).toThrow(/PHONEPE_WEBHOOK_USERNAME: is required/)
+    expect(() => loadEnv({ ...uatSettings, AUTH_SECRET: undefined })).toThrow(/AUTH_SECRET: is required/)
+    expect(() => loadEnv({ ...uatSettings, DB_SSL: 'disable' })).toThrow(/cannot be disabled/)
+    expect(() => loadEnv({ ...uatSettings, DATABASE_URL: undefined })).toThrow(/DATABASE_URL: is required/)
+    // Live: production PhonePe, and the flag must not be left on.
+    const live = loadEnv({ ...production, PHONEPE_ENV: 'production' })
+    expect([live.PHONEPE_ENV, live.ALLOW_SANDBOX_PAYMENTS]).toEqual(['production', false])
+    expect(() => loadEnv({ ...production, PHONEPE_ENV: 'production', ALLOW_SANDBOX_PAYMENTS: 'true' })).toThrow(/must be removed/)
+    expect(() => loadEnv({ ...valid, ALLOW_SANDBOX_PAYMENTS: 'yes' })).toThrow(/ALLOW_SANDBOX_PAYMENTS/)
+  })
   it('takes the store reviewer demo account as an email plus a 6-digit code, together', () => {
     expect(loadEnv({ REVIEW_ACCOUNT_EMAIL: 'Reviewer@Example.com', REVIEW_ACCOUNT_CODE: '424242' }).REVIEW_ACCOUNT_EMAIL).toBe('reviewer@example.com')
     expect(() => loadEnv({ REVIEW_ACCOUNT_EMAIL: 'r@example.com' })).toThrow(/must be set together/)

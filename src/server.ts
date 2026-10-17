@@ -28,6 +28,7 @@ const stopDeliveryJob = routes
   : undefined
 
 const server = app.listen(env.PORT, env.HOST, () => {
+  if (env.NODE_ENV === 'production' && env.PHONEPE_ENV === 'sandbox') console.warn('WARNING: PhonePe is in SANDBOX mode (ALLOW_SANDBOX_PAYMENTS=true). Payments here are test payments, not real money.')
   console.log(`ShreeRam Milks API listening on http://${env.HOST}:${env.PORT} (${env.NODE_ENV}${pool ? ', database configured' : ', no database configured'})`)
 })
 // Slow or stalled clients must not hold connections open. The keep-alive time is longer than the AWS load balancer's

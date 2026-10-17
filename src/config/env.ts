@@ -46,6 +46,11 @@ const schema = z.object({
    * the merchant id is what the phone app gives PhonePe's SDK.
    */
   PHONEPE_ENV: z.enum(['sandbox', 'production']).default('sandbox'),
+  /**
+   * Lets a server running with NODE_ENV=production (error handling, secure cookies, strict checks) take PhonePe SANDBOX payments, for
+   * testing on AWS before PhonePe approves live access. Off by default. It only allows PHONEPE_ENV=sandbox; remove it when going live.
+   */
+  ALLOW_SANDBOX_PAYMENTS: z.enum(['true', 'false']).default('false').transform(value => value === 'true'),
   PHONEPE_CLIENT_ID: z.string().optional().transform(value => value || undefined),
   PHONEPE_CLIENT_SECRET: z.string().optional().transform(value => value || undefined),
   PHONEPE_CLIENT_VERSION: z.coerce.number().int().min(1).default(1),
@@ -68,6 +73,7 @@ const schema = z.object({
   if ((value.REVIEW_ACCOUNT_EMAIL === undefined) !== (value.REVIEW_ACCOUNT_CODE === undefined)) context.addIssue({ code: 'custom', path: ['REVIEW_ACCOUNT_CODE'], message: 'REVIEW_ACCOUNT_EMAIL and REVIEW_ACCOUNT_CODE must be set together.' })
   if (value.REVIEW_ACCOUNT_EMAIL !== undefined && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(value.REVIEW_ACCOUNT_EMAIL)) context.addIssue({ code: 'custom', path: ['REVIEW_ACCOUNT_EMAIL'], message: 'must be an email address.' })
   if (value.REVIEW_ACCOUNT_CODE !== undefined && !/^\d{6}$/.test(value.REVIEW_ACCOUNT_CODE)) context.addIssue({ code: 'custom', path: ['REVIEW_ACCOUNT_CODE'], message: 'must be exactly 6 digits.' })
+  if (value.ALLOW_SANDBOX_PAYMENTS && value.PHONEPE_ENV === 'production') context.addIssue({ code: 'custom', path: ['ALLOW_SANDBOX_PAYMENTS'], message: 'must be removed (or false) when PHONEPE_ENV=production, so a live server cannot be left in test mode by mistake.' })
   const phonePe = [value.PHONEPE_CLIENT_ID, value.PHONEPE_CLIENT_SECRET, value.PHONEPE_MERCHANT_ID]
   if (phonePe.some(Boolean) && !phonePe.every(Boolean)) context.addIssue({ code: 'custom', path: ['PHONEPE_CLIENT_ID'], message: 'PHONEPE_CLIENT_ID, PHONEPE_CLIENT_SECRET and PHONEPE_MERCHANT_ID must be set together.' })
   if ((value.PHONEPE_WEBHOOK_USERNAME === undefined) !== (value.PHONEPE_WEBHOOK_PASSWORD === undefined)) context.addIssue({ code: 'custom', path: ['PHONEPE_WEBHOOK_PASSWORD'], message: 'PHONEPE_WEBHOOK_USERNAME and PHONEPE_WEBHOOK_PASSWORD must be set together.' })
@@ -82,7 +88,8 @@ const schema = z.object({
     for (const key of ['PHONEPE_CLIENT_ID', 'PHONEPE_WEBHOOK_USERNAME'] as const) {
       if (!value[key]) context.addIssue({ code: 'custom', path: [key], message: 'is required in production.' })
     }
-    if (value.PHONEPE_ENV !== 'production') context.addIssue({ code: 'custom', path: ['PHONEPE_ENV'], message: 'must be "production" in production.' })
+    // Real money needs the live PhonePe. The sandbox is allowed only when ALLOW_SANDBOX_PAYMENTS=true says so on purpose (testing before approval).
+    if (value.PHONEPE_ENV !== 'production' && !value.ALLOW_SANDBOX_PAYMENTS) context.addIssue({ code: 'custom', path: ['PHONEPE_ENV'], message: 'must be "production" in production (or set ALLOW_SANDBOX_PAYMENTS=true to test with the PhonePe sandbox).' })
     if (value.DB_SSL === 'disable') context.addIssue({ code: 'custom', path: ['DB_SSL'], message: 'cannot be disabled in production.' })
     if (value.CORS_ORIGINS.some(origin => origin.startsWith('http://'))) context.addIssue({ code: 'custom', path: ['CORS_ORIGINS'], message: 'must use https:// in production.' })
   }

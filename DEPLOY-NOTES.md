@@ -23,6 +23,7 @@ Set these in the hosting platform's secret store. The server refuses to start in
 | `FIREBASE_SERVICE_ACCOUNT_FILE` or `FIREBASE_SERVICE_ACCOUNT_JSON` | yes | Firebase service account for notifications. Create a **new** key for production |
 | `AWS_REGION`, `S3_MEDIA_BUCKET` | yes | Private bucket for pictures. Use an instance role, not keys |
 | `PHONEPE_ENV` | yes | `production` once PhonePe is live (default `sandbox`) |
+| `ALLOW_SANDBOX_PAYMENTS` | no | `true` lets a `NODE_ENV=production` server use `PHONEPE_ENV=sandbox` for testing on AWS (UAT, Play closed test). Everything else stays strict. The server refuses to start if it is `true` together with `PHONEPE_ENV=production`. **Remove it when going live.** |
 | `PHONEPE_CLIENT_ID`, `PHONEPE_CLIENT_SECRET`, `PHONEPE_CLIENT_VERSION`, `PHONEPE_MERCHANT_ID` | yes | PhonePe live credentials (set all together) |
 | `PHONEPE_WEBHOOK_USERNAME`, `PHONEPE_WEBHOOK_PASSWORD` | yes | The username and password typed into PhonePe's webhook settings (see `PHONEPE-WEBHOOK-SETUP.txt`) |
 | `REVIEW_ACCOUNT_EMAIL`, `REVIEW_ACCOUNT_CODE` | only if the Play reviewer needs it | A demo sign-in: this email always signs in with this fixed 6-digit code, and no email is sent. Set both or neither. **Remove them after the store review.** |
