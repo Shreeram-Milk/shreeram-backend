@@ -1,0 +1,16 @@
+node_modules
+dist
+coverage
+*.log
+
+# Secrets stay on your machine or in AWS Secrets Manager. Only .env.example is committed.
+.env
+.env.*
+!.env.example
+
+# Database certificates and keys
+*.pem
+*.crt
+*.key
+# The public RDS certificate bundle is not a secret; the server needs it to trust the database.
+!certs/global-bundle.pem

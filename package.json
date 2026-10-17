@@ -1,0 +1,49 @@
+{
+  "name": "shreeram-milks-backend",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Express API for the ShreeRam Milks admin and customer app.",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev": "tsx watch --env-file-if-exists=.env.local src/server.ts",
+    "build": "tsc -p tsconfig.build.json",
+    "start": "node dist/server.js",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "test": "vitest run",
+    "check": "npm run typecheck && npm run lint && npm test",
+    "migrate": "tsx --env-file-if-exists=.env.local scripts/migrate.ts",
+    "import-pins": "tsx --env-file-if-exists=.env.local scripts/import-pin-directory.ts",
+    "create-admin": "tsx --env-file-if-exists=.env.local scripts/create-admin.ts"
+  },
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.1149.0",
+    "@aws-sdk/s3-request-presigner": "^3.1149.0",
+    "cors": "^2.8.6",
+    "express": "^5.3.0",
+    "express-rate-limit": "^8.7.1",
+    "firebase-admin": "^14.5.0",
+    "helmet": "^8.3.0",
+    "nodemailer": "^10.0.16",
+    "pg": "^8.23.1",
+    "pino": "^10.4.0",
+    "pino-http": "^11.0.0",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@types/cors": "^2.8.19",
+    "@types/express": "^5.0.6",
+    "@types/node": "^24.0.0",
+    "@types/pg": "^8.23.1",
+    "@types/supertest": "^7.2.1",
+    "eslint": "^9.39.0",
+    "supertest": "^7.3.1",
+    "tsx": "^4.23.15",
+    "typescript": "^5.9.0",
+    "typescript-eslint": "^8.71.1",
+    "vitest": "^5.0.3"
+  }
+}
