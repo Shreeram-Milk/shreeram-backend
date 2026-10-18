@@ -113,8 +113,10 @@ export function createCustomerAuthRepository(database: Database): CustomerAuthRe
     async anonymise(customerId, now) {
       await database.query(
         // One statement, so a deletion can never leave addresses or delivery notes behind. The address rows stay (marked removed) with
-        // placeholder text, because the columns must hold something and old orders still point at them.
+        // placeholder text, because the columns must hold something and old orders still point at them. Push tokens are deleted so
+        // no phone is ever notified for a deleted account.
         `with signed_out as (update customer_sessions set revoked_at = $2 where customer_id = $1 and revoked_at is null returning 1),
+              push_removed as (delete from push_tokens where customer_id = $1 returning 1),
               addresses_blanked as (update customer_addresses set recipient_name = 'Removed', recipient_phone = '+910000000000', line1 = 'Removed', line2 = '', landmark = '', city = '', is_default = false, removed_at = coalesce(removed_at, $2), updated_at = now() where customer_id = $1 returning 1),
               notes_blanked as (update customer_doorstep_instructions set additional_instructions = '', updated_at = now() where customer_id = $1 returning 1),
               tickets_blanked as (update support_ticket_messages set body = '[removed]' where author = 'customer' and ticket_id in (select id from support_tickets where customer_id = $1) returning 1)
