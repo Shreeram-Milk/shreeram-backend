@@ -9,7 +9,7 @@ export const MAX_ADDRESSES_PER_CUSTOMER = 10
 export const addressInputSchema = z.object({
   label: z.enum(ADDRESS_LABELS).default('home'),
   recipientName: z.string().trim().min(1, 'Enter the name of the person receiving the delivery.').max(100),
-  recipientPhone: phoneSchema,
+  recipientPhone: z.union([z.string().trim().length(0), phoneSchema]).default(''),
   line1: z.string().trim().min(1, 'Enter your house, flat or block number.').max(150),
   line2: z.string().trim().max(150).default(''),
   landmark: z.string().trim().max(150).default(''),

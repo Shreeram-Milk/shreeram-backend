@@ -31,6 +31,27 @@ describe('customer addresses', () => {
     expect(response.body.address).toMatchObject({ label: 'home', recipientPhone: '+919824612345', pinCode: '382010', isDefault: true, serviceable: true })
   })
 
+  it.each(['', '   ', undefined])('saves and returns an address without a contact number (%j)', async recipientPhone => {
+    const api = await createTestApi()
+    const { token, customerId } = await signUpByEmail(api, '9824612345')
+    const customer = api.customerAuth.customers.get(customerId)
+    if (customer) customer.phone = null
+    const response = await save(api, token, { ...home, recipientPhone })
+    expect(response.status).toBe(201)
+    expect(response.body.address.recipientPhone).toBe('')
+    expect(await list(api, token)).toMatchObject([{ id: response.body.address.id, recipientPhone: '' }])
+  })
+
+  it('allows a saved contact number to be cleared', async () => {
+    const api = await createTestApi()
+    const token = await signUp(api, '9824612345')
+    const { id } = (await save(api, token, home)).body.address
+    const response = await request(api.app).put(`/customer/addresses/${id}`).set(bearer(token)).send({ ...home, recipientPhone: '' })
+    expect(response.status).toBe(200)
+    expect(await list(api, token)).toMatchObject([{ id, recipientPhone: '' }])
+    expect((await save(api, token, { ...home, recipientPhone: '+91' })).status).toBe(400)
+  })
+
   it('says whether each address can be delivered to, from the delivery check and not from anything stored', async () => {
     const api = await createTestApi()
     const token = await signUp(api, '9824612345')
