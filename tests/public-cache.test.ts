@@ -54,7 +54,7 @@ describe('public endpoints are easy on the database', () => {
     const responses = await Promise.all(Array.from({ length: 25 }, () => request(api.app).get('/public/banners')))
     expect(responses.every(response => response.status === 200)).toBe(true)
     expect(read).toHaveBeenCalledTimes(1)
-    expect(responses[0]?.headers['cache-control']).toBe('public, max-age=30, stale-while-revalidate=60')
+    expect(responses[0]?.headers['cache-control']).toBe('public, max-age=30, stale-while-revalidate=30')
   })
   it('does the same for the slides and the settings', async () => {
     const api = await createTestApi({ withAdmin: false })

@@ -3,7 +3,16 @@ import { getSignedUrl } from '@aws-sdk/s3-request-presigner'
 import type { ObjectStorage } from './storage.js'
 
 const UPLOAD_SECONDS = 5 * 60
-const DOWNLOAD_SECONDS = 60 * 60
+const DOWNLOAD_SECONDS = 2 * 60 * 60
+/**
+ * Picture links are signed as if at the start of the current half hour, so the same picture gets the same link for 30 minutes.
+ * A new link on every request made phones download every picture again on each screen change, and cost an S3 request each time.
+ * Each link still has at least 90 minutes left when handed out. A replaced picture has a new key, so it shows at once.
+ */
+const DOWNLOAD_LINK_STEP_MS = 30 * 60 * 1000
+
+/** The start of the current half hour: the same signing time, and so the same link, for every request inside it. */
+export const downloadSigningDate = (now: Date): Date => new Date(Math.floor(now.getTime() / DOWNLOAD_LINK_STEP_MS) * DOWNLOAD_LINK_STEP_MS)
 
 type Settings = { region: string; bucket: string }
 
@@ -23,7 +32,7 @@ export function createS3Storage({ region, bucket }: Settings, client: S3Client =
       })
       return { url, headers: { 'Content-Type': contentType }, expiresInSeconds: UPLOAD_SECONDS }
     },
-    createDownloadUrl: key => getSignedUrl(client, new GetObjectCommand({ Bucket: bucket, Key: key }), { expiresIn: DOWNLOAD_SECONDS }),
+    createDownloadUrl: key => getSignedUrl(client, new GetObjectCommand({ Bucket: bucket, Key: key }), { expiresIn: DOWNLOAD_SECONDS, signingDate: downloadSigningDate(new Date()) }),
     async readObjectText(key, maxBytes) {
       const object = await client.send(new GetObjectCommand({ Bucket: bucket, Key: key, Range: `bytes=0-${maxBytes - 1}` }))
       return (await object.Body?.transformToString('utf-8')) ?? ''
