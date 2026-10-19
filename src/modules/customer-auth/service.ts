@@ -11,8 +11,8 @@ export interface CustomerCodeSender {
 export const CODE_MINUTES = 10
 export const CODE_MAX_ATTEMPTS = 5
 export const RESEND_SECONDS = 60
-export const MAX_CODES_PER_EMAIL_PER_HOUR = 5
-export const MAX_CODES_PER_IP_PER_HOUR = 30
+export const MAX_CODES_PER_EMAIL_PER_HOUR = 50
+export const MAX_CODES_PER_IP_PER_HOUR = 100
 /** Phones stay signed in for a long time; signing out or deleting the account ends it at once. */
 export const SESSION_DAYS = 90
 

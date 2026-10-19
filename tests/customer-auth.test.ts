@@ -1,7 +1,7 @@
 import request from 'supertest'
 import { describe, expect, it } from 'vitest'
 import { normalizePhone } from '../src/modules/customer-auth/schema.js'
-import { MAX_CODES_PER_EMAIL_PER_HOUR } from '../src/modules/customer-auth/service.js'
+import { MAX_CODES_PER_EMAIL_PER_HOUR, MAX_CODES_PER_IP_PER_HOUR } from '../src/modules/customer-auth/service.js'
 import { createFakeCustomerAuthRepository, createTestApi, SECRET, type TestApi } from './fakes.js'
 import { createCustomerAuthService } from '../src/modules/customer-auth/service.js'
 
@@ -54,19 +54,40 @@ describe('asking for a code', () => {
     expect(response.status).toBe(400)
     expect(response.body.error.details[0].field).toBe('email')
   })
-  it('makes a person wait a minute between codes, and caps codes per hour', async () => {
+  it('makes a person wait a minute between codes', async () => {
     const api = await createTestApi()
     expect((await requestCode(api)).status).toBe(202)
     expect((await requestCode(api)).body.error.code).toBe('CODE_TOO_SOON')
-    for (let count = 1; count < MAX_CODES_PER_EMAIL_PER_HOUR; count += 1) {
-      api.clock.advanceMinutes(2)
-      expect((await requestCode(api)).status).toBe(202)
-    }
-    api.clock.advanceMinutes(2)
-    expect((await requestCode(api)).body.error.code).toBe('TOO_MANY_CODES')
-    api.clock.advanceMinutes(60)
+    api.clock.advanceMinutes(1)
     expect((await requestCode(api)).status).toBe(202)
   })
+  it('caps codes per email within a rolling hour', async () => {
+    const api = await createTestApi()
+    const customers = createFakeCustomerAuthRepository(() => api.clock.now())
+    const service = createCustomerAuthService({ repository: customers.repository, sender: { channel: 'console', async sendCode() {} }, secret: SECRET, now: () => api.clock.now() })
+    await service.requestCode(EMAIL, '192.0.2.1')
+    for (let count = 1; count < MAX_CODES_PER_EMAIL_PER_HOUR; count += 1) {
+      api.clock.advanceMinutes(1)
+      await service.requestCode(EMAIL, '192.0.2.1')
+    }
+    api.clock.advanceMinutes(1)
+    await expect(service.requestCode(EMAIL, '192.0.2.1')).rejects.toMatchObject({ code: 'TOO_MANY_CODES' })
+    api.clock.advanceMinutes(60)
+    await expect(service.requestCode(EMAIL, '192.0.2.1')).resolves.toBeUndefined()
+  })
+  it('allows multiple testers on one network and still caps requests from that network', async () => {
+    const api = await createTestApi()
+    const customers = createFakeCustomerAuthRepository(() => api.clock.now())
+    const service = createCustomerAuthService({ repository: customers.repository, sender: { channel: 'console', async sendCode() {} }, secret: SECRET, now: () => api.clock.now() })
+    for (let count = 0; count < MAX_CODES_PER_IP_PER_HOUR; count += 1) {
+      await service.requestCode(`tester${count}@example.com`, '192.0.2.1')
+    }
+    await expect(service.requestCode('another@example.com', '192.0.2.1')).rejects.toMatchObject({ code: 'TOO_MANY_CODES' })
+    await expect(service.requestCode('another@example.com', '192.0.2.2')).resolves.toBeUndefined()
+    api.clock.advanceMinutes(61)
+    await expect(service.requestCode('another@example.com', '192.0.2.1')).resolves.toBeUndefined()
+  })
+
   it('only the newest code works', async () => {
     const api = await createTestApi()
     await requestCode(api)
@@ -150,6 +171,14 @@ describe('the signed-in customer', () => {
     const saved = await request(api.app).put('/customer/me').set(bearer(token)).send({ name: '  Asha Patel ', phone: '98246 12345', language: 'gu' })
     expect(saved.body.customer).toMatchObject({ name: 'Asha Patel', email: EMAIL, phone: PHONE, language: 'gu', needsProfile: false })
   })
+  it.each(['', '   ', undefined])('can save a profile without a contact number (%j)', async phone => {
+    const api = await createTestApi()
+    const token = await signIn(api)
+    const saved = await request(api.app).put('/customer/me').set(bearer(token)).send({ name: 'Asha Patel', phone, language: 'en' })
+    expect(saved.status).toBe(200)
+    expect(saved.body.customer).toMatchObject({ name: 'Asha Patel', phone: '', needsProfile: false })
+  })
+
   it('cannot save a profile without a name or with a bad phone number, and ignores fields it does not know', async () => {
     const api = await createTestApi()
     const token = await signIn(api)
