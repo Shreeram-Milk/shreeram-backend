@@ -1,5 +1,6 @@
 import nodemailer, { type Transporter } from 'nodemailer'
 import type { CodeSender } from './service.js'
+import { createCodeEmail } from './code-email.js'
 
 /**
  * Development only: prints the login code in the backend window instead of emailing it, so sign-in can be tested
@@ -12,9 +13,6 @@ export const consoleCodeSender: CodeSender = {
 }
 
 export type SmtpSettings = { host: string; port: number; user: string; pass: string; from: string }
-
-/** Escapes text for the HTML part of an email. The code is digits, but the habit keeps future templates safe. */
-const escapeHtml = (value: string) => value.replace(/[&<>"']/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character] as string)
 
 /**
  * Emails the login code through any SMTP server (Gmail, or AWS SES's SMTP endpoint in production).
@@ -29,8 +27,7 @@ export function createSmtpCodeSender(settings: SmtpSettings, transport?: Transpo
         from: settings.from,
         to: email,
         subject: 'Your ShreeRam Milks admin login code',
-        text: `Your login code is ${code}.\n\nIt works once and expires in 10 minutes. If you did not try to sign in, ignore this email and change your password.`,
-        html: `<p>Your login code is</p><p style="font-size:28px;font-weight:700;letter-spacing:4px">${escapeHtml(code)}</p><p>It works once and expires in 10 minutes. If you did not try to sign in, ignore this email and change your password.</p>`,
+        ...createCodeEmail(code, 'admin'),
       })
     },
   }

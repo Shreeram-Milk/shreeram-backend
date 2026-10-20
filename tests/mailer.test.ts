@@ -3,6 +3,8 @@ import request from 'supertest'
 import { describe, expect, it, vi } from 'vitest'
 import { createApp } from '../src/app.js'
 import { createSmtpCodeSender } from '../src/modules/auth/mailer.js'
+import { createCodeEmail } from '../src/modules/auth/code-email.js'
+import { createSmtpCustomerCodeSender } from '../src/modules/customer-auth/email-sender.js'
 import { createAuthRouter } from '../src/modules/auth/routes.js'
 import { createAuthService, type CodeSender } from '../src/modules/auth/service.js'
 import { ADMIN_ORIGIN, PASSWORD, SECRET, createClock, createFakeAuthRepository } from './fakes.js'
@@ -10,6 +12,26 @@ import { ADMIN_ORIGIN, PASSWORD, SECRET, createClock, createFakeAuthRepository }
 const settings = { host: 'smtp.example.com', port: 587, user: 'sender@example.com', pass: 'app-password', from: 'ShreeRam Milks <sender@example.com>' }
 
 describe('emailing the login code', () => {
+  it('sends customers a selectable code with leading zeroes preserved in HTML and plain text', async () => {
+    const transport = nodemailer.createTransport({ jsonTransport: true })
+    const sendMail = vi.spyOn(transport, 'sendMail')
+    await createSmtpCustomerCodeSender(settings, transport).sendCode('customer@example.com', '012345')
+    const mail = sendMail.mock.calls[0]?.[0] as { to: string; subject: string; html: string; text: string }
+    expect(mail.to).toBe('customer@example.com')
+    expect(mail.subject).toBe('Your ShreeRam Milks sign-in code')
+    expect(mail.html.match(/<code\b[^>]*>([^<]*)<\/code>/)?.[1]).toBe('012345')
+    expect(mail.text).toContain('\n\n012345\n\n')
+    expect(mail.html).toContain('10 minutes')
+    expect(mail.html).not.toMatch(/<script|<button|onclick=|<img/i)
+  })
+  it('escapes values in the HTML and keeps the admin security advice', () => {
+    const mail = createCodeEmail('<img src=x onerror="alert(1)">', 'admin')
+    expect(mail.html).not.toContain('<img')
+    expect(mail.html).toContain('&lt;img')
+    expect(mail.text).toContain('change your password')
+    expect(mail.html).toContain('change your password')
+  })
+
   it('sends one email to the admin with the code, the right sender and a plain explanation', async () => {
     const transport = nodemailer.createTransport({ jsonTransport: true })
     const sender = createSmtpCodeSender(settings, transport)

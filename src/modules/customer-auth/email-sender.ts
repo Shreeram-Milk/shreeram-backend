@@ -1,8 +1,7 @@
 import nodemailer, { type Transporter } from 'nodemailer'
 import type { SmtpSettings } from '../auth/mailer.js'
 import type { CustomerCodeSender } from './service.js'
-
-const escapeHtml = (value: string) => value.replace(/[&<>"']/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character] as string)
+import { createCodeEmail } from '../auth/code-email.js'
 
 /**
  * Emails the customer's sign-in code through the same SMTP server the admin login uses (the MAIL_* settings). Port 465 uses TLS
@@ -17,8 +16,7 @@ export function createSmtpCustomerCodeSender(settings: SmtpSettings, transport?:
         from: settings.from,
         to: email,
         subject: 'Your ShreeRam Milks sign-in code',
-        text: `Your sign-in code is ${code}.\n\nIt works once and expires in 10 minutes. If you did not ask for it, you can ignore this email.`,
-        html: `<p>Your sign-in code is</p><p style="font-size:28px;font-weight:700;letter-spacing:4px">${escapeHtml(code)}</p><p>It works once and expires in 10 minutes. If you did not ask for it, you can ignore this email.</p>`,
+        ...createCodeEmail(code, 'customer'),
       })
     },
   }
