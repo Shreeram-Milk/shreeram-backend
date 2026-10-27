@@ -79,7 +79,7 @@ import { createAdminPaymentRouter, createCustomerPaymentRouter, createPhonePeWeb
 import { createPaymentService } from './modules/payments/service.js'
 import { createSubscriptionRepository } from './modules/subscriptions/repository.js'
 import { createAdminSubscriptionRouter, createCustomerSubscriptionRouter } from './modules/subscriptions/routes.js'
-import { createSubscriptionService } from './modules/subscriptions/service.js'
+import { createSubscriptionService, HORIZON_DAYS } from './modules/subscriptions/service.js'
 import { createCustomerAddressRepository } from './modules/customer-addresses/repository.js'
 import { createCustomerAddressRouter } from './modules/customer-addresses/routes.js'
 import { createCustomerAddressService } from './modules/customer-addresses/service.js'
@@ -190,6 +190,7 @@ export function createRoutes({ env, database, sender, customerSender, storage, p
   const payments = createPaymentService({
     repository: createPaymentRepository(database), gateway: choosePaymentGateway(env), orders: orderRepository, logger: paymentLogger,
     onSubscriptionStarted: id => subscriptions.syncNow(id),
+    onOrdersPlaced: (customerId, placed) => orders.announcePlaced(customerId, placed),
   })
   const offers = createOfferService({ repository: createOfferRepository(database), audit })
   const orders = createOrderService({ repository: orderRepository, addresses: createCustomerAddressRepository(database), delivery, audit, payments, offers, notifier })
@@ -198,7 +199,7 @@ export function createRoutes({ env, database, sender, customerSender, storage, p
   })
   const credit = createCreditService({ repository: createCreditRepository(database), audit, payments, notifier })
   const adjustments = createAdjustmentService({ repository: createAdjustmentRepository(database), audit, notifier })
-  const productionPlans = createProductionPlanService({ repository: createProductionPlanRepository(database) })
+  const productionPlans = createProductionPlanService({ repository: createProductionPlanRepository(database), horizonDays: HORIZON_DAYS, jobStatus: () => subscriptions.jobStatus() })
   const customerAddresses = createCustomerAddressService({ repository: createCustomerAddressRepository(database), delivery })
   const supportTickets = createSupportTicketService({ repository: createSupportTicketRepository(database), audit })
   const customers = createCustomerService({ repository: createCustomerRepository(database), addresses: createCustomerAddressRepository(database), audit })

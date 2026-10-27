@@ -83,6 +83,20 @@ export function createOrderService({ repository, addresses, delivery, audit, pay
     }
   }
 
+  /** Tells the customer their order is placed. Once per order, however many times it runs, and never fails the caller. */
+  async function announcePlaced(customerId: string, placed: OrderView[]): Promise<void> {
+    for (const order of placed) {
+      try {
+        await notifier.notify({
+          event: 'order_placed', customerId, vars: { order: order.orderNumber, product: order.items[0]?.productName ?? '' }, varsGujarati: { product: order.items[0]?.productNameGu ?? '' },
+          link: `/order-tracking?orderId=${order.id}`, dedupeKey: `order:${order.id}:placed`,
+        })
+      } catch {
+        // The order is already placed; failing to tell the customer must not hide it.
+      }
+    }
+  }
+
   /**
    * Prices the cart and works out what it becomes, entirely from stored data: every size must be live, every product must be
    * deliverable to the address, and each delivery setup becomes its own order. Hard problems (an item that is gone, a PIN that is not
@@ -92,14 +106,15 @@ export function createOrderService({ repository, addresses, delivery, audit, pay
     const address = await addresses.find(customerId, input.addressId)
     if (!address) throw new AppError(404, 'ADDRESS_NOT_FOUND', 'That address was not found.')
     const requested = mergeLines(input.lines)
-    const preferredSlots = new Map(input.lines.flatMap(line => (line.slotId ? [[line.variantId, line.slotId] as const] : [])))
     const found = new Map((await repository.loadVariants(requested.map(line => line.variantId))).map(variant => [variant.variantId, variant]))
-    const allLines: CartLine[] = requested.map(({ variantId, quantity }) => {
+    const allLines: CartLine[] = requested.map(({ variantId, quantity, slotId }) => {
       const variant = found.get(variantId)
       if (!variant || !variant.variantActive || !variant.productActive || !variant.categoryActive || !variant.deliveryMethod || !variant.serviceAreaId) {
         throw new AppError(409, 'ITEM_UNAVAILABLE', `${variant?.productName ?? 'An item in your cart'} is no longer available. Remove it to continue.`, { variantId })
       }
-      return { variant, quantity }
+      if (!variant.purchaseMethods.includes('buy_once')) throw new AppError(409, 'BUY_ONCE_NOT_OFFERED', 'This product cannot be bought as a one-time purchase.')
+      if (variant.deliveryMethod === 'shipping' && slotId) throw new AppError(409, 'SLOT_NOT_AVAILABLE', 'Courier products do not use delivery windows.')
+      return { variant, quantity, ...(slotId ? { slotId } : {}) }
     })
 
     // Is each product deliverable to this PIN right now, and which windows does it get? Asked once per product.
@@ -123,12 +138,11 @@ export function createOrderService({ repository, addresses, delivery, audit, pay
       const slots = group.deliveryMethod === 'local_delivery' && answer?.served ? answer.slots : []
       // The customer's choice must be one of the offered windows. With no choice made and only one window offered, that one is used.
       // An explicit choice on the review screen wins; otherwise the window picked on the product page, if it is still offered.
-      const preferredId = group.lines.map(line => preferredSlots.get(line.variant.variantId)).find(id => id !== undefined && slots.some(slot => slot.slotId === id))
-      const wanted = input.slots[group.key] ?? preferredId
+      const wanted = group.lines[0]?.slotId ?? input.slots[group.key]
       const picked = wanted ? (slots.find(slot => slot.slotId === wanted) ?? null) : (slots.length === 1 ? (slots[0] ?? null) : null)
       chosen.set(group.key, picked)
       if (group.deliveryMethod === 'local_delivery' && !picked) {
-        problems.push({ code: input.slots[group.key] ? 'SLOT_NOT_AVAILABLE' : 'SLOT_REQUIRED', message: 'Choose a delivery window for this order.', details: { key: group.key } })
+        problems.push({ code: wanted ? 'SLOT_NOT_AVAILABLE' : 'SLOT_REQUIRED', message: 'Choose a delivery window for this order.', details: { key: group.key } })
       }
       const subtotal = subtotalPaise(group.lines)
       const onCredit = money.customerType === 'credit' && creditEligible(group.lines)
@@ -260,7 +274,9 @@ export function createOrderService({ repository, addresses, delivery, audit, pay
       const { orders, onlinePaise } = await prepare(customerId, input, prefix)
       if (onlinePaise > 0) throw new AppError(409, 'PAYMENT_REQUIRED', 'This order is paid online.', { amountPaise: onlinePaise })
       try {
-        return { orders: await repository.placeOrders(customerId, orders, now()) }
+        const placed = await repository.placeOrders(customerId, orders, now())
+        await announcePlaced(customerId, placed)
+        return { orders: placed }
       } catch (error) {
         // Two identical requests at the same moment: the second one finds the first one's orders instead of failing.
         if (isUniqueViolation(error)) {
@@ -288,6 +304,8 @@ export function createOrderService({ repository, addresses, delivery, audit, pay
         },
       })
     },
+
+    announcePlaced,
 
     listMine: (customerId: string, query: CustomerOrderListQuery) => repository.listForCustomer(customerId, query),
 

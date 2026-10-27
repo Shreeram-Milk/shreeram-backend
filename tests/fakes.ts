@@ -430,13 +430,16 @@ export function createFakePolicyRepository(): PolicyRepository & { rows: Policy[
 }
 
 /** Delivery slots in memory. `usageBySlot` is how tests pretend areas or cut-off rules use a slot. */
-export function createFakeDeliverySlotRepository(): DeliverySlotRepository & { rows: DeliverySlot[]; usageBySlot: Map<string, { areas: number; rules: number }> } {
+export function createFakeDeliverySlotRepository(): DeliverySlotRepository & { rows: DeliverySlot[]; usageBySlot: Map<string, { areas: number; rules: number }>; sameDayRules: (slotId: string, startTime: string) => string[] } {
   const rows: DeliverySlot[] = []
   const usageBySlot = new Map<string, { areas: number; rules: number }>()
   const stamp = () => new Date().toISOString()
   const sorted = () => [...rows].sort((a, b) => a.startTime.localeCompare(b.startTime) || a.name.localeCompare(b.name))
   return {
     rows, usageBySlot,
+    /** Set by the test app once the order-by rules exist, so the slot store can ask about them like the real query does. */
+    sameDayRules: () => [] as string[],
+    async sameDayRulesClosingAfter(slotId, startTime) { return this.sameDayRules(slotId, startTime) },
     async list({ search, status, page, pageSize }) {
       const matches = sorted().filter(slot => (!status || slot.status === status) && (!search || slot.name.toLowerCase().includes(search.toLowerCase())))
       return { rows: matches.slice((page - 1) * pageSize, page * pageSize), total: matches.length }
@@ -471,6 +474,7 @@ export function createFakeCutoffRuleRepository(slots: { rows: DeliverySlot[] }):
     async setStatus(id, status) { const row = rows.find(item => item.id === id); if (!row) return null; row.status = status; return row },
     async nameExists(name, excludingId) { return rows.some(row => row.id !== excludingId && row.name.trim().toLowerCase() === name.trim().toLowerCase()) },
     async slotStatuses(slotIds) { return new Map(slots.rows.filter(slot => slotIds.includes(slot.id)).map(slot => [slot.id, slot.status])) },
+    async slotStarts(slotIds) { return new Map(slots.rows.filter(slot => slotIds.includes(slot.id)).map(slot => [slot.id, slot.startTime])) },
     async remove(id) { const index = rows.findIndex(item => item.id === id); if (index < 0) return false; rows.splice(index, 1); return true },
     async usage(id) { const names = productsByRule.get(id) ?? []; return [{ label: 'products', count: names.length, examples: names }] },
   }
@@ -770,7 +774,7 @@ export function createFakeOrderRepository(stores: { products: { rows: Product[] 
           if (!variantIds.includes(variant.id)) continue
           found.push({
             variantId: variant.id, variantName: variant.name, pricePaise: variant.pricePaise, variantActive: variant.status === 'active',
-            productId: product.id, productName: product.name, productNameGu: product.nameGu, productActive: product.status === 'active',
+            productId: product.id, productName: product.name, productNameGu: product.nameGu, productActive: product.status === 'active', purchaseMethods: product.purchaseMethods,
             categoryActive: stores.categories.rows.find(category => category.id === product.categoryId)?.status === 'active',
             deliveryMethod: product.deliveryMethod, serviceAreaId: product.serviceAreaId, cutoffRuleId: product.cutoffRuleId,
             includeInProductionPlanning: product.includeInProductionPlanning, excludedFromCredit: product.excludedFromCredit,
@@ -1170,6 +1174,7 @@ export async function createTestApi(options: { clock?: ReturnType<typeof createC
   const policyRepository = createFakePolicyRepository()
   const deliverySlotRepository = createFakeDeliverySlotRepository()
   const cutoffRuleRepository = createFakeCutoffRuleRepository(deliverySlotRepository)
+  deliverySlotRepository.sameDayRules = (slotId, startTime) => cutoffRuleRepository.rows.filter(rule => rule.conditions.some(condition => condition.deliverySlotId === slotId && condition.dayRelation === 'same_day' && condition.cutoffTime > startTime)).map(rule => rule.name).sort()
   const serviceAreaRepository = createFakeServiceAreaRepository(deliverySlotRepository)
   const categoryRepository = createFakeSimpleRepository<Category, CategoryInput>()
   const trialPlanRepository = createFakeSimpleRepository<TrialPlan, TrialPlanInput>()
@@ -1213,7 +1218,7 @@ export async function createTestApi(options: { clock?: ReturnType<typeof createC
   const subscriptionStore = createFakeSubscriptionRepository({ orders: orderStore, customers: customerAuth.customers, now: clock.now, slots: deliverySlotRepository, products: productRepository, rules: subscriptionRuleRepository, trialPlans: trialPlanRepository, offers: offerStore })
   const paymentStore = createFakePaymentRepository({ orders: orderStore, credit: creditStore, customers: customerAuth.customers, now: clock.now, subscriptions: subscriptionStore })
   const phonePe = createFakeGateway()
-  const paymentService = createPaymentService({ repository: paymentStore.repository, gateway: phonePe.gateway, orders: orderStore.repository, now: clock.now, onSubscriptionStarted: id => subscriptionService.syncNow(id) })
+  const paymentService = createPaymentService({ repository: paymentStore.repository, gateway: phonePe.gateway, orders: orderStore.repository, now: clock.now, onSubscriptionStarted: id => subscriptionService.syncNow(id), onOrdersPlaced: (customerId, placed) => orderService.announcePlaced(customerId, placed) })
   const creditService = createCreditService({ repository: creditStore.repository, audit: auditWriter, now: clock.now, payments: paymentService, notifier })
   const adjustmentStore = createFakeAdjustmentRepository({ orders: orderStore, customers: customerAuth.customers, now: clock.now })
   const adjustmentService = createAdjustmentService({ repository: adjustmentStore.repository, audit: auditWriter, now: clock.now, notifier })

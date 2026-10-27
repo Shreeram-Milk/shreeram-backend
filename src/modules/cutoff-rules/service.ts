@@ -19,11 +19,17 @@ export function createCutoffRuleService({ repository, audit }: Dependencies) {
   /** Every slot must exist, and a new condition cannot use an inactive slot (one already in the rule may stay). */
   async function checkSlots(input: CutoffRuleInput, current?: CutoffRule) {
     const statuses = await repository.slotStatuses(input.conditions.map(condition => condition.deliverySlotId))
+    const starts = await repository.slotStarts(input.conditions.map(condition => condition.deliverySlotId))
     const alreadyUsed = new Set(current?.conditions.map(condition => condition.deliverySlotId))
     input.conditions.forEach((condition, index) => {
       const status = statuses.get(condition.deliverySlotId)
       const field = `conditions.${index}.deliverySlotId`
       if (!status) throw new ValidationError([{ field, message: 'That delivery slot does not exist.' }])
+      const start = starts.get(condition.deliverySlotId)
+      // Ordering that stays open after the delivery has started would let orders arrive for milk already on the road.
+      if (start && condition.dayRelation === 'same_day' && condition.cutoffTime > start) {
+        throw new ValidationError([{ field: `conditions.${index}.cutoffTime`, message: `Orders must close before this slot starts at ${start}. Choose ${start} or earlier, or choose the night before.` }])
+      }
       if (status === 'inactive' && !alreadyUsed.has(condition.deliverySlotId)) throw new ValidationError([{ field, message: 'Choose an active slot.' }])
     })
   }

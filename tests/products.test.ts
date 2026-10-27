@@ -260,6 +260,22 @@ describe('how a product is delivered', () => {
     expect(saved.body.product).toMatchObject({ deliveryMethod: 'local_delivery', serviceAreaId: ids.area, cutoffRuleId: rule, includeInProductionPlanning: true })
   })
 
+  it('only lets a product with an order-by time (and our own delivery) join the production plan', async () => {
+    const api = await createTestApi()
+    const ids = await setup(api)
+    const rule = await cutoff(api, ids)
+    const wholeState = await state(api, ids)
+    const noCutoff = await send(api, ids.cookie, 'post', '/admin/products', live(ids, { includeInProductionPlanning: true }))
+    expect(noCutoff.status).toBe(400)
+    expect(noCutoff.body.error.details).toEqual([{ field: 'includeInProductionPlanning', message: 'Production planning needs an order-by time. Choose one, or switch production planning off.' }])
+    const planningOff = await send(api, ids.cookie, 'post', '/admin/products', live(ids, { name: 'Ready-made curd', includeInProductionPlanning: false }))
+    expect(planningOff.status).toBe(201)
+    const courier = await send(api, ids.cookie, 'post', '/admin/products', live(ids, { name: 'Courier ghee', deliveryMethod: 'shipping', purchaseMethods: ['buy_once'], trialPlanIds: [], serviceAreaId: wholeState, includeInProductionPlanning: true }))
+    expect(courier.status).toBe(400)
+    const planned = await send(api, ids.cookie, 'post', '/admin/products', live(ids, { name: 'Planned milk', cutoffRuleId: rule, includeInProductionPlanning: true }))
+    expect(planned.status).toBe(201)
+  })
+
   it('keeps delivery method and area matched, and shipping simple', async () => {
     const api = await createTestApi()
     const ids = await setup(api)

@@ -17,6 +17,29 @@ async function customerWithPhone(api: TestApi, phone: string, token = TOKEN) {
 }
 const inbox = async (api: TestApi, token: string) => (await request(api.app).get('/customer/notifications').set(bearer(token))).body as { notifications: Array<{ id: string; event: string; title: string; titleGujarati: string; body: string; link: string | null; readAt: string | null }>; unread: number; total: number }
 
+describe('order placed message', () => {
+  it('tells the customer once when an order is placed, on credit or paid online, and does nothing while the message is off', async () => {
+    const api = await createTestApi()
+    const s = await shop(api)
+    // The message is added by a migration; a database without it simply sends nothing.
+    const customer = await customerWithPhone(api, '9824612399')
+    const first = (await place(api, customer.token, milkOrder(s, customer.addressId, 'key-placed-0'))).body.orders[0]
+    await api.notificationService.flush()
+    expect((await inbox(api, customer.token)).notifications).toEqual([])
+    api.notificationStore.templates.set('order_placed', { event: 'order_placed', title: 'Order placed', titleGujarati: 'ઓર્ડર થઈ ગયો', body: 'Thank you! Your order {{order}} is placed.', bodyGujarati: 'આભાર! {{order}}', enabled: true, updatedAt: new Date().toISOString() } as never)
+    const order = (await place(api, customer.token, milkOrder(s, customer.addressId, 'key-placed-1'))).body.orders[0]
+    await api.notificationService.flush()
+    const list = await inbox(api, customer.token)
+    expect(list.notifications.map(item => item.event)).toEqual(['order_placed'])
+    expect(list.notifications[0]?.body).toBe(`Thank you! Your order ${order.orderNumber} is placed.`)
+    expect(first.id).not.toBe(order.id)
+    // Repeating the same request returns the same order and does not tell the customer again.
+    await place(api, customer.token, milkOrder(s, customer.addressId, 'key-placed-1'))
+    await api.notificationService.flush()
+    expect((await inbox(api, customer.token)).notifications).toHaveLength(1)
+  })
+})
+
 describe('automatic messages', () => {
   it('tells the customer when an order is out for delivery and when it is delivered, and only once each', async () => {
     const api = await createTestApi()

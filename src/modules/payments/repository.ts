@@ -132,11 +132,33 @@ async function refundDue(client: PoolClient, payment: Row, amountPaise: number, 
   await activity(client, String(payment.id), 'refund_due', { code, amountPaise })
 }
 
+/** How long after the order-by time a payment that was started in time may still be confirmed (UPI and bank confirmations can be slow). Matches the payment expiry grace. */
+export const LATE_PAYMENT_GRACE_MS = 15 * 60_000
+
+/**
+ * True when a paid checkout can no longer become orders because an own-delivery window it needs has already closed: the customer began
+ * paying after the order-by time, or the confirmation arrived more than the grace period after it. A customer who started paying in time
+ * and whose bank confirmed a little late still gets the order; the kitchen's "final" plan then moves by at most those few minutes.
+ */
+export function orderWindowClosed(orders: Array<{ deliveryMethod: string; orderBy: string | null }>, startedAt: Date, now: Date): boolean {
+  return orders.some(order => {
+    if (order.deliveryMethod !== 'local_delivery' || !order.orderBy) return false
+    const closes = Date.parse(order.orderBy)
+    return startedAt.getTime() >= closes || now.getTime() >= closes + LATE_PAYMENT_GRACE_MS
+  })
+}
+
 async function settleOrder(client: PoolClient, payment: Row, now: Date): Promise<void> {
   const snapshot = orderSnapshotOf(payment.checkout_snapshot)
   const amount = Number(payment.amount_paise)
   if (!snapshot) {
     await refundDue(client, payment, amount, 'Paid online, but the order details were unreadable. Refund the payment in PhonePe, then record it.', 'SNAPSHOT_INVALID', true)
+    return
+  }
+  // The window may have closed while the customer was paying. A closed window is already counted as final in the production plan,
+  // so the order is not added to it: the money goes back instead. Paying that began in time is honoured for a short grace period.
+  if (orderWindowClosed(snapshot.orders, payment.created_at instanceof Date ? payment.created_at : now, now)) {
+    await refundDue(client, payment, amount, 'Paid online after the order-by time had passed, so the order was not placed. Refund the payment in PhonePe, then record it.', 'ORDER_WINDOW_CLOSED', true)
     return
   }
   // A savepoint, so a refused order (account blocked, credit limit in a mixed cart) can be undone on its own while the
@@ -245,7 +267,7 @@ export function createPaymentRepository(database: Database): PaymentRepository {
     }),
 
     settle: (paymentId, completion, now) => withTransaction(database, async client => {
-      const { rows } = await client.query<Row>('select id, customer_id, purpose, amount_paise, status, payment_request_id, checkout_snapshot from payments where id = $1 for update', [paymentId])
+      const { rows } = await client.query<Row>('select id, customer_id, purpose, amount_paise, status, payment_request_id, checkout_snapshot, created_at from payments where id = $1 for update', [paymentId])
       const payment = rows[0]
       if (!payment || payment.status !== 'pending') return { changed: false }
       await client.query(

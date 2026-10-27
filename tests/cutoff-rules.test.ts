@@ -73,6 +73,33 @@ describe('cut-off rules (admin)', () => {
     expect(api.cutoffRules.rows).toHaveLength(0)
   })
 
+  it('refuses a same-day cut-off that falls after the slot has started', async () => {
+    const api = await createTestApi()
+    const cookie = await signedIn(api)
+    const slots = await twoSlots(api, cookie)
+    const late = await send(api, cookie, 'post', '/admin/cutoff-rules', rule(slots, { conditions: [{ deliverySlotId: slots.morning, dayRelation: 'same_day', cutoffTime: '06:00' }] }))
+    expect([late.status, late.body.error.details[0].field]).toEqual([400, 'conditions.0.cutoffTime'])
+    const atStart = await send(api, cookie, 'post', '/admin/cutoff-rules', rule(slots, { conditions: [{ deliverySlotId: slots.morning, dayRelation: 'same_day', cutoffTime: '05:00' }] }))
+    expect(atStart.status).toBe(201)
+  })
+
+  it('refuses to move a slot start earlier than a same-day order-by time that depends on it', async () => {
+    const api = await createTestApi()
+    const cookie = await signedIn(api)
+    const slots = await twoSlots(api, cookie)
+    // Evening starts at 17:00 and this rule closes ordering for it at 11:00 on the same day.
+    expect((await send(api, cookie, 'post', '/admin/cutoff-rules', rule(slots))).status).toBe(201)
+    const tooEarly = await send(api, cookie, 'put', `/admin/delivery-slots/${slots.evening}`, { name: 'Evening', startTime: '10:00', endTime: '19:00' })
+    expect(tooEarly.status).toBe(400)
+    expect(tooEarly.body.error.details[0]).toMatchObject({ field: 'startTime' })
+    expect(tooEarly.body.error.details[0].message).toContain('Standard milk')
+    const fine = await send(api, cookie, 'put', `/admin/delivery-slots/${slots.evening}`, { name: 'Evening', startTime: '11:30', endTime: '19:00' })
+    expect(fine.status).toBe(200)
+    // Changing only the name or end time never triggers the check.
+    const renamed = await send(api, cookie, 'put', `/admin/delivery-slots/${slots.evening}`, { name: 'Late evening', startTime: '11:30', endTime: '20:00' })
+    expect(renamed.status).toBe(200)
+  })
+
   it('lets a rule keep a slot that was switched off later, but refuses to add one', async () => {
     const api = await createTestApi()
     const cookie = await signedIn(api)

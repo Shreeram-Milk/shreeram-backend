@@ -1,3 +1,5 @@
+import { instantAt } from '../delivery-brain/rules.js'
+
 /** One line of demand: how much of one size of one product is wanted in one delivery window, in what production unit. */
 export type DemandRow = {
   slotId: string; slotName: string; startTime: string; endTime: string
@@ -13,7 +15,7 @@ export type DemandRow = {
 }
 /** Pieces by how they were bought: a one-time purchase, a trial or a subscription. */
 export type TypeSplit = { oneTime: number; trial: number; subscription: number }
-/** When ordering for a window closes (the latest order-by time among its orders), or null when it has no cut-off. */
+/** When a window can no longer change: the latest of its orders' order-by and cancel-by times, or null when some order in it has no cut-off. */
 export type SlotClosing = { slotId: string; closesAt: string | null; orderCount?: number }
 
 export type UnitTotal = { unit: string; quantity: number }
@@ -21,7 +23,7 @@ export type PlannedVariant = { variantId: string; variantName: string; quantity:
 export type PlannedProduct = { productId: string; productName: string; variants: PlannedVariant[]; production: UnitTotal[]; quantity: number; byType: TypeSplit; cancelledQuantity: number }
 export type PlannedSlot = {
   slotId: string; slotName: string; startTime: string; endTime: string
-  /** "open" while customers can still order for it (the amounts may grow); "final" once its order-by time has passed. */
+  /** "open" while customers can still order or cancel (the amounts may change); "final" once both the order-by and cancel-by times have passed. */
   status: 'open' | 'final'; closesAt: string | null
   products: PlannedProduct[]; production: UnitTotal[]
   /** Pieces to make in this window, split by how they were bought, and pieces cancelled or skipped. */
@@ -29,7 +31,18 @@ export type PlannedSlot = {
   /** Orders still wanted in this window (each counted once, whatever is in it). */
   orderCount: number
 }
-export type ProductionPlan = { date: string; slots: PlannedSlot[] }
+/** Something staff must know before trusting the numbers. */
+export type PlanWarning = { code: 'SUBSCRIPTIONS_NOT_READY' | 'SUBSCRIPTION_JOB_STALE' | 'SUBSCRIPTION_JOB_FAILING'; message: string }
+export type ProductionPlan = { date: string; slots: PlannedSlot[]; warnings: PlanWarning[] }
+
+/**
+ * A window is final once its order-by time has passed. A window with no order-by time (no cut-off rule) is final once its delivery
+ * day has begun, the same moment customers can no longer cancel it.
+ */
+function isFinal(date: string, closesAt: string | null, now: Date): boolean {
+  const closes = closesAt ? new Date(closesAt) : instantAt(date, '00:00')
+  return now.getTime() >= closes.getTime()
+}
 
 const round = (value: number) => Math.round(value * 1000) / 1000
 const emptySplit = (): TypeSplit => ({ oneTime: 0, trial: 0, subscription: 0 })
@@ -53,7 +66,7 @@ export function buildProductionPlan(date: string, rows: DemandRow[], closings: S
     if (!entry) {
       const closesAt = closesBySlot.get(row.slotId) ?? null
       entry = {
-        slot: { slotId: row.slotId, slotName: row.slotName, startTime: row.startTime, endTime: row.endTime, closesAt, status: closesAt && now.getTime() >= new Date(closesAt).getTime() ? 'final' : 'open', products: [], production: [], quantity: 0, byType: emptySplit(), cancelledQuantity: 0, orderCount: ordersBySlot.get(row.slotId) ?? 0 },
+        slot: { slotId: row.slotId, slotName: row.slotName, startTime: row.startTime, endTime: row.endTime, closesAt, status: isFinal(date, closesAt, now) ? 'final' : 'open', products: [], production: [], quantity: 0, byType: emptySplit(), cancelledQuantity: 0, orderCount: ordersBySlot.get(row.slotId) ?? 0 },
         units: new Map(), products: new Map(),
       }
       slots.set(row.slotId, entry)
@@ -84,5 +97,5 @@ export function buildProductionPlan(date: string, rows: DemandRow[], closings: S
     return { ...slot, production: toList(units) }
   })
   planned.sort((a, b) => a.startTime.localeCompare(b.startTime) || a.slotName.localeCompare(b.slotName))
-  return { date, slots: planned }
+  return { date, slots: planned, warnings: [] }
 }

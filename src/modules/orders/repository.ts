@@ -247,7 +247,7 @@ export function createOrderRepository(database: Database): OrderRepository {
       const { rows } = await database.query<Row>(
         `select v.id as variant_id, v.name as variant_name, v.price_paise, v.status as variant_status, v.production_unit, v.production_quantity::float8 as production_quantity,
                 p.id as product_id, p.name as product_name, p.name_gu as product_name_gu, p.status as product_status, c.status as category_status,
-                p.delivery_method, p.service_area_id, p.cutoff_rule_id, p.include_in_production_planning, p.excluded_from_credit
+                p.delivery_method, p.service_area_id, p.cutoff_rule_id, p.include_in_production_planning, p.excluded_from_credit, p.purchase_methods
          from product_variants v join products p on p.id = v.product_id join categories c on c.id = p.category_id
          where v.id = any($1::uuid[])`,
         [variantIds],
@@ -255,7 +255,7 @@ export function createOrderRepository(database: Database): OrderRepository {
       return rows.map((row): CheckoutVariant => ({
         variantId: String(row.variant_id), variantName: String(row.variant_name), pricePaise: Number(row.price_paise), variantActive: row.variant_status === 'active',
         productId: String(row.product_id), productName: String(row.product_name), productNameGu: String(row.product_name_gu),
-        productActive: row.product_status === 'active', categoryActive: row.category_status === 'active',
+        productActive: row.product_status === 'active', categoryActive: row.category_status === 'active', purchaseMethods: row.purchase_methods as string[],
         deliveryMethod: (row.delivery_method as DeliveryMethod | null) ?? null, serviceAreaId: row.service_area_id ? String(row.service_area_id) : null, cutoffRuleId: row.cutoff_rule_id ? String(row.cutoff_rule_id) : null,
         includeInProductionPlanning: Boolean(row.include_in_production_planning), excludedFromCredit: Boolean(row.excluded_from_credit),
         productionUnit: String(row.production_unit), productionQuantity: Number(row.production_quantity),

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { canReturnMoney, canTransition, creditEligible, customerCanCancel, doorstepNoteOf, groupBySetup, mergeLines, releasesMoney, subtotalPaise, withinCreditLimit, type CartLine, type CheckoutVariant } from '../src/modules/orders/rules.js'
 
 const variant = (extra: Partial<CheckoutVariant> = {}): CheckoutVariant => ({
-  variantId: 'v1', variantName: '500 ml', pricePaise: 3500, variantActive: true, productId: 'p1', productName: 'Milk', productNameGu: '', productActive: true, categoryActive: true,
+  variantId: 'v1', variantName: '500 ml', pricePaise: 3500, variantActive: true, productId: 'p1', productName: 'Milk', productNameGu: '', productActive: true, categoryActive: true, purchaseMethods: ['buy_once'],
   deliveryMethod: 'local_delivery', serviceAreaId: 'area-1', cutoffRuleId: 'rule-1', includeInProductionPlanning: true, excludedFromCredit: false, productionUnit: 'Litre', productionQuantity: 0.5, ...extra,
 })
 const line = (extra: Partial<CheckoutVariant>, quantity = 1): CartLine => ({ variant: variant(extra), quantity })

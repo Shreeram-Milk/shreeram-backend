@@ -18,6 +18,8 @@ export interface CutoffRuleRepository {
   nameExists(name: string, excludingId?: string): Promise<boolean>
   /** The status of each requested slot; a slot that does not exist is left out. */
   slotStatuses(slotIds: string[]): Promise<Map<string, RecordStatus>>
+  /** The start time ("06:00") of each requested slot; a slot that does not exist is left out. */
+  slotStarts(slotIds: string[]): Promise<Map<string, string>>
   /** Products that use this rule. */
   usage(id: string): Promise<Usage[]>
   /** Deletes the record (and what belongs to it). Only called once `usage` says nothing uses it. */
@@ -84,6 +86,10 @@ export function createCutoffRuleRepository(database: Database): CutoffRuleReposi
     async slotStatuses(slotIds) {
       const { rows } = await database.query<Row>('select id, status from delivery_slots where id = any($1::uuid[])', [slotIds])
       return new Map(rows.map(row => [String(row.id), row.status as RecordStatus]))
+    },
+    async slotStarts(slotIds) {
+      const { rows } = await database.query<Row>("select id, to_char(start_time, 'HH24:MI') as start_time from delivery_slots where id = any($1::uuid[])", [slotIds])
+      return new Map(rows.map(row => [String(row.id), String(row.start_time)]))
     },
     async usage(id) {
       const { rows } = await database.query<Row>("select count(*)::int as total, coalesce((array_agg(name order by name))[1:5], '{}') as names from products where cutoff_rule_id = $1", [id])

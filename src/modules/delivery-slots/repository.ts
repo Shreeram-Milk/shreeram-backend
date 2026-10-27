@@ -16,6 +16,8 @@ export interface DeliverySlotRepository {
   nameExists(name: string, excludingId?: string): Promise<boolean>
   /** What uses this slot: PIN codes that allow it and cut-off conditions that name it. */
   usage(id: string): Promise<Usage[]>
+  /** Names of the order-by rules that close ordering on the same day as delivery after `startTime`, i.e. once this slot would already have started. */
+  sameDayRulesClosingAfter(id: string, startTime: string): Promise<string[]>
   /** Deletes the record (and what belongs to it). Only called once `usage` says nothing uses it. */
   remove(id: string): Promise<boolean>
 }
@@ -58,6 +60,13 @@ export function createDeliverySlotRepository(database: Database): DeliverySlotRe
     async nameExists(name, excludingId) {
       const { rows } = await database.query<Row>('select 1 from delivery_slots where lower(trim(name)) = lower(trim($1)) and ($2::uuid is null or id <> $2::uuid) limit 1', [name, excludingId ?? null])
       return rows.length > 0
+    },
+    async sameDayRulesClosingAfter(id, startTime) {
+      const { rows } = await database.query<Record<string, unknown>>(
+        "select distinct r.name from cutoff_conditions c join cutoff_rules r on r.id = c.cutoff_rule_id where c.delivery_slot_id = $1 and c.day_relation = 'same_day' and to_char(c.cutoff_time, 'HH24:MI') > $2 order by r.name",
+        [id, startTime],
+      )
+      return rows.map(row => String(row.name))
     },
     async usage(id) {
       const { rows } = await database.query<Row>(

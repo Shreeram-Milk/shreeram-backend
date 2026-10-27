@@ -13,6 +13,8 @@ type Dependencies = {
   orders: Pick<OrderRepository, 'findByKeyPrefix'>
   /** Called once a subscription paid online has been written, so its first delivery orders are made at once. */
   onSubscriptionStarted?: (subscriptionId: string) => Promise<void>
+  /** Called once when an online payment for an order is confirmed and its orders are written, so the customer can be told. */
+  onOrdersPlaced?: (customerId: string, orders: Awaited<ReturnType<Dependencies['orders']['findByKeyPrefix']>>) => Promise<void>
   logger?: Logger
   now?: () => Date
 }
@@ -48,7 +50,7 @@ const notFound = () => new AppError(404, 'PAYMENT_NOT_FOUND', 'That payment was 
  * repository step, which is locked per payment, so a payment confirmed by the phone, the webhook and the background check
  * at the same moment is still delivered exactly once.
  */
-export function createPaymentService({ repository, gateway, orders, onSubscriptionStarted, logger = silentLogger, now = () => new Date() }: Dependencies) {
+export function createPaymentService({ repository, gateway, orders, onSubscriptionStarted, onOrdersPlaced, logger = silentLogger, now = () => new Date() }: Dependencies) {
   async function view(payment: OnlinePayment): Promise<CustomerPaymentView> {
     const snapshot = payment.snapshot as { kind?: string; orderKeyPrefix?: string } | null
     const placed = payment.purpose === 'order' && payment.fulfilment === 'fulfilled' && snapshot?.kind === 'order' && snapshot.orderKeyPrefix
@@ -70,6 +72,10 @@ export function createPaymentService({ repository, gateway, orders, onSubscripti
       if (settled.changed && settled.fulfilment === 'fulfilled' && payment.purpose === 'subscription' && onSubscriptionStarted) {
         const subscription = await repository.subscriptionOf(payment.id)
         if (subscription) await onSubscriptionStarted(subscription.id).catch(error => logger.error({ paymentId: payment.id, err: error }, 'Making the first subscription orders failed'))
+      }
+      if (settled.changed && settled.fulfilment === 'fulfilled' && payment.purpose === 'order' && onOrdersPlaced) {
+        const prefix = (payment.snapshot as { orderKeyPrefix?: string } | null)?.orderKeyPrefix
+        if (prefix) await orders.findByKeyPrefix(payment.customerId, prefix).then(placed => onOrdersPlaced(payment.customerId, placed)).catch(error => logger.error({ paymentId: payment.id, err: error }, 'Telling the customer their order is placed failed'))
       }
       return
     }

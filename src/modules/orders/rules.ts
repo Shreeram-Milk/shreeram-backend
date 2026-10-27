@@ -41,16 +41,21 @@ export function customerCanCancel(order: { status: OrderStatus; deliveryMethod: 
 export type CheckoutVariant = {
   variantId: string; variantName: string; pricePaise: number; variantActive: boolean
   productId: string; productName: string; productNameGu: string; productActive: boolean; categoryActive: boolean
+  purchaseMethods: readonly string[]
   deliveryMethod: DeliveryMethod | null; serviceAreaId: string | null; cutoffRuleId: string | null
   includeInProductionPlanning: boolean; excludedFromCredit: boolean; productionUnit: string; productionQuantity: number
 }
-export type CartLine = { variant: CheckoutVariant; quantity: number }
+export type CartLine = { variant: CheckoutVariant; quantity: number; slotId?: string }
 
 /** The same variant twice becomes one line and the quantities add up (the phone may send one size from two places). */
-export function mergeLines(lines: ReadonlyArray<{ variantId: string; quantity: number }>): Array<{ variantId: string; quantity: number }> {
-  const merged = new Map<string, number>()
-  for (const line of lines) merged.set(line.variantId, (merged.get(line.variantId) ?? 0) + line.quantity)
-  return [...merged].map(([variantId, quantity]) => ({ variantId, quantity }))
+export function mergeLines(lines: ReadonlyArray<{ variantId: string; quantity: number; slotId?: string }>): Array<{ variantId: string; quantity: number; slotId?: string }> {
+  const merged = new Map<string, { variantId: string; quantity: number; slotId?: string }>()
+  for (const line of lines) {
+    const key = `${line.variantId}:${line.slotId ?? ''}`
+    const existing = merged.get(key)
+    merged.set(key, { ...line, quantity: (existing?.quantity ?? 0) + line.quantity })
+  }
+  return [...merged.values()]
 }
 
 /** The key of a delivery setup: method, area and cut-off rule. Products sharing it travel together, so they share an order. */
@@ -65,7 +70,7 @@ export function groupBySetup(lines: CartLine[]): OrderGroup[] {
   for (const line of lines) {
     const { deliveryMethod, serviceAreaId } = line.variant
     if (!deliveryMethod || !serviceAreaId) throw new Error('A cart line without a delivery setup cannot be grouped.')
-    const key = setupKeyOf(line.variant)
+    const key = `${setupKeyOf(line.variant)}${line.slotId && deliveryMethod === 'local_delivery' ? `:${line.slotId}` : ''}`
     const group = groups.get(key)
     if (group) group.lines.push(line)
     else groups.set(key, { key, deliveryMethod, serviceAreaId, lines: [line] })

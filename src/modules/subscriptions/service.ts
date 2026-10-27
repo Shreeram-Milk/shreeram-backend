@@ -344,6 +344,7 @@ export function createSubscriptionService({ repository, orders, addresses, deliv
     }
   }
 
+  let lastRun: { at: string; startedAt: string; failures: number } | null = null
   type Tally = { created: number; skipped: number; failures: number }
   /**
    * Makes the orders for one subscription's coming deliveries (today and the next few days), skips days that passed without
@@ -596,6 +597,7 @@ export function createSubscriptionService({ repository, orders, addresses, deliv
      * could not be delivered to the end, and closes finished subscriptions. Safe to run any number of times, even at once.
      */
     async generate(): Promise<{ checked: number; failures: number; created: number; skipped: number }> {
+      const startedAt = now()
       const tally: Tally = { created: 0, skipped: 0, failures: 0 }
       let checked = 0
       let after: string | null = null
@@ -613,8 +615,12 @@ export function createSubscriptionService({ repository, orders, addresses, deliv
         if (batch.length < BATCH) break
         after = batch[batch.length - 1]?.id ?? null
       }
+      lastRun = { at: now().toISOString(), startedAt: startedAt.toISOString(), failures: tally.failures }
       return { checked, ...tally }
     },
+
+    /** When the delivery job last finished a pass on this server, and how many subscriptions failed in it. Null before the first pass. */
+    jobStatus: (): { at: string; failures: number } | null => (lastRun ? { at: lastRun.at, failures: lastRun.failures } : null),
 
     adminList: (query: AdminSubscriptionListQuery) => repository.adminList(query, today()),
     adminGet,

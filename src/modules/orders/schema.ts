@@ -17,7 +17,15 @@ const lineSchema = z.object({
  */
 export const checkoutInputSchema = z.object({
   addressId: z.uuid('Choose a delivery address.'),
-  lines: z.array(lineSchema).min(1, 'Your cart is empty.').max(MAX_CART_LINES, `At most ${MAX_CART_LINES} different items in one order.`),
+  lines: z.array(lineSchema).min(1, 'Your cart is empty.').max(MAX_CART_LINES, `At most ${MAX_CART_LINES} different items in one order.`).superRefine((lines, context) => {
+    const quantities = new Map<string, number>()
+    for (const [index, line] of lines.entries()) {
+      const key = `${line.variantId}:${line.slotId ?? ''}`
+      const total = (quantities.get(key) ?? 0) + line.quantity
+      quantities.set(key, total)
+      if (total > MAX_QUANTITY_PER_LINE) context.addIssue({ code: 'custom', path: [index, 'quantity'], message: `At most ${MAX_QUANTITY_PER_LINE} of one item per delivery window.` })
+    }
+  }),
   slots: z.record(z.string().max(200), z.uuid('Choose a delivery window.')).default({}),
   /** A fresh value for each press of "Place order". A repeated value returns the same orders instead of making new ones. */
   idempotencyKey: z.string().trim().min(8, 'Missing request key.').max(80, 'Request key is too long.'),

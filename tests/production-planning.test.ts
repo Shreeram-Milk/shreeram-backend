@@ -1,6 +1,7 @@
 import request from 'supertest'
 import { describe, expect, it } from 'vitest'
 import { buildProductionPlan, type DemandRow } from '../src/modules/production-planning/rules.js'
+import { planWarnings } from '../src/modules/production-planning/service.js'
 import { ADMIN_ORIGIN, PASSWORD, createTestApi } from './fakes.js'
 
 const row = (extra: Partial<DemandRow>): DemandRow => ({
@@ -46,19 +47,27 @@ describe('how much to make', () => {
     expect(after.slots.map(slot => [slot.slotName, slot.status])).toEqual([['Morning', 'final'], ['Evening', 'open']])
   })
 
-  it('stays open when a window has no cut-off, shows windows in time order, and ignores sizes with no production figure in the totals', () => {
+  it('stays open before the delivery day when a window has no cut-off, shows windows in time order, and ignores sizes with no production figure in the totals', () => {
     const plan = buildProductionPlan('2026-10-15', [
       row({ slotId: 'evening', slotName: 'Evening', startTime: '17:00', endTime: '20:00' }),
       row({ variantId: 'noprod', variantName: 'Gift box', productionUnit: '', productionQuantity: 0 }),
-    ], [{ slotId: 'morning', closesAt: null }], new Date('2026-12-01T00:00:00.000Z'))
+    ], [{ slotId: 'morning', closesAt: null }], new Date('2026-10-14T10:00:00.000Z'))
     expect(plan.slots.map(slot => slot.slotName)).toEqual(['Morning', 'Evening'])
     expect(plan.slots[0]?.status).toBe('open')
     expect(plan.slots[0]?.production).toEqual([])
     expect(plan.slots[0]?.products[0]?.variants[0]?.production).toBeNull()
   })
 
+  it('makes a window with no cut-off final once its delivery day has begun in India', () => {
+    const rows = [row({})]
+    const closings = [{ slotId: 'morning', closesAt: null }]
+    // 2026-10-14 18:29 UTC is 23:59 on the 14th in India: still before the 15th. 18:30 UTC is midnight of the 15th.
+    expect(buildProductionPlan('2026-10-15', rows, closings, new Date('2026-10-14T18:29:00.000Z')).slots[0]?.status).toBe('open')
+    expect(buildProductionPlan('2026-10-15', rows, closings, new Date('2026-10-14T18:30:00.000Z')).slots[0]?.status).toBe('final')
+  })
+
   it('gives an empty plan for a day with no orders', () => {
-    expect(buildProductionPlan('2026-10-15', [], [], new Date())).toEqual({ date: '2026-10-15', slots: [] })
+    expect(buildProductionPlan('2026-10-15', [], [], new Date())).toEqual({ date: '2026-10-15', slots: [], warnings: [] })
   })
 })
 
@@ -78,5 +87,21 @@ describe('GET /admin/production-planning', () => {
     expect(response.status).toBe(200)
     expect(response.headers['cache-control']).toBe('no-store')
     expect(response.body.plan.slots[0]).toMatchObject({ slotName: 'Morning', production: [{ unit: 'Litre', quantity: 20 }] })
+  })
+})
+
+describe('plan warnings', () => {
+  const now = new Date('2026-10-24T06:30:00.000Z')
+  const fresh = { at: '2026-10-24T06:28:00.000Z', failures: 0 }
+  it('says nothing when the subscription job is recent and the day is inside the horizon', () => {
+    expect(planWarnings('2026-10-25', now, 3, fresh)).toEqual([])
+  })
+  it('warns that days beyond the horizon are missing subscriptions', () => {
+    expect(planWarnings('2026-10-28', now, 3, fresh).map(warning => warning.code)).toEqual(['SUBSCRIPTIONS_NOT_READY'])
+  })
+  it('warns when the job never ran, ran long ago, or failed for some subscriptions', () => {
+    expect(planWarnings('2026-10-25', now, 3, null).map(warning => warning.code)).toEqual(['SUBSCRIPTION_JOB_STALE'])
+    expect(planWarnings('2026-10-25', now, 3, { at: '2026-10-24T05:00:00.000Z', failures: 0 }).map(warning => warning.code)).toEqual(['SUBSCRIPTION_JOB_STALE'])
+    expect(planWarnings('2026-10-25', now, 3, { ...fresh, failures: 2 }).map(warning => warning.code)).toEqual(['SUBSCRIPTION_JOB_FAILING'])
   })
 })

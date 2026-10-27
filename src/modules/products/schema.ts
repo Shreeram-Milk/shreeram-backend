@@ -68,6 +68,8 @@ export const productInputSchema = z.object({
   if (new Set(names).size !== names.length) context.addIssue({ code: 'custom', path: ['variants'], message: 'Variant names must be unique.' })
   const skus = product.variants.map(variant => variant.sku.toLowerCase()).filter(Boolean)
   if (new Set(skus).size !== skus.length) context.addIssue({ code: 'custom', path: ['variants'], message: 'Variant SKUs must be unique.' })
+  // The daily plan exists to know how much to make before ordering closes, so a product with no order-by time has nothing to plan.
+  if (product.includeInProductionPlanning && product.deliveryMethod !== 'shipping' && !product.cutoffRuleId) context.addIssue({ code: 'custom', path: ['includeInProductionPlanning'], message: 'Production planning needs an order-by time. Choose one, or switch production planning off.' })
   if (product.deliveryMethod === 'shipping' && (product.cutoffRuleId || product.includeInProductionPlanning)) context.addIssue({ code: 'custom', path: ['deliveryMethod'], message: 'Shipping cannot use a cut-off rule or production planning.' })
   // Trials and subscriptions need a delivery window every day; a courier has none.
   if (product.deliveryMethod === 'shipping' && product.purchaseMethods.some(method => method !== 'buy_once')) context.addIssue({ code: 'custom', path: ['purchaseMethods'], message: 'Courier products can only be bought once (no trial or subscription).' })

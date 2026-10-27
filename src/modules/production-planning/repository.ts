@@ -19,7 +19,7 @@ export function createProductionPlanRepository(database: Database): ProductionPl
       const [demand, closings] = await Promise.all([
         database.query<Row>(
           `select o.delivery_slot_id as slot_id, coalesce(ds.name, o.slot_name) as slot_name, to_char(coalesce(ds.start_time, o.slot_start_time), 'HH24:MI') as start_time, to_char(coalesce(ds.end_time, o.slot_end_time), 'HH24:MI') as end_time,
-                  i.product_id, i.product_name, i.variant_id, i.variant_name, i.production_unit,
+                  i.product_id, (array_agg(i.product_name order by o.placed_at desc))[1] as product_name, i.variant_id, (array_agg(i.variant_name order by o.placed_at desc))[1] as variant_name, i.production_unit,
                   coalesce(sum(i.quantity) filter (where o.status <> 'cancelled'), 0)::int as quantity,
                   count(distinct o.id) filter (where o.status <> 'cancelled')::int as order_count,
                   coalesce(sum(i.quantity * i.production_quantity) filter (where o.status <> 'cancelled'), 0)::float8 as production_quantity,
@@ -29,21 +29,22 @@ export function createProductionPlanRepository(database: Database): ProductionPl
                   coalesce(sum(i.quantity) filter (where o.status = 'cancelled'), 0)::int as cancelled_quantity
            from orders o join order_items i on i.order_id = o.id left join delivery_slots ds on ds.id = o.delivery_slot_id
            where o.delivery_date = $1::date and o.delivery_method = 'local_delivery' and o.status <> 'missed' and i.include_in_production_planning
-           group by o.delivery_slot_id, coalesce(ds.name, o.slot_name), coalesce(ds.start_time, o.slot_start_time), coalesce(ds.end_time, o.slot_end_time), i.product_id, i.product_name, i.variant_id, i.variant_name, i.production_unit
-           order by coalesce(ds.start_time, o.slot_start_time), i.product_name, i.variant_name`,
+           group by o.delivery_slot_id, coalesce(ds.name, o.slot_name), coalesce(ds.start_time, o.slot_start_time), coalesce(ds.end_time, o.slot_end_time), i.product_id, i.variant_id, i.production_unit
+           order by start_time, product_name, variant_name`,
           [date],
         ),
         database.query<Row>(
           `select slot_id,
-                  -- The window closes at the order-by time of its orders. If every order in it was cancelled, the cancelled ones still tell when it closes.
+                  -- The window is final when nothing in it can change any more: after the order-by time (no new orders) AND the cancel-by time (no cancellations),
+                  -- whichever is later, for each order. If every order in it was cancelled, the cancelled ones still tell when it closes.
                   case when active > 0 then (case when active_without_time > 0 then null else active_latest end) else any_latest end as closes_at,
                   active as order_count
            from (
              select delivery_slot_id as slot_id,
                     count(*) filter (where status not in ('cancelled', 'missed'))::int as active,
                     count(*) filter (where status not in ('cancelled', 'missed') and order_by is null)::int as active_without_time,
-                    max(order_by) filter (where status not in ('cancelled', 'missed')) as active_latest,
-                    max(order_by) as any_latest
+                    max(greatest(order_by, cancel_by)) filter (where status not in ('cancelled', 'missed')) as active_latest,
+                    max(greatest(order_by, cancel_by)) as any_latest
              from orders where delivery_date = $1::date and delivery_method = 'local_delivery' group by delivery_slot_id
            ) per_window`,
           [date],

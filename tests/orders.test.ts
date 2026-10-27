@@ -118,7 +118,9 @@ describe('pricing and placing an order', () => {
     expect(withPreference.body.quote.problems).toEqual([])
     const notOffered = await quote(api, token, { addressId, lines: [{ variantId: s.milkVariant, quantity: 1, slotId: '11111111-1111-4111-8111-111111111111' }] })
     expect(notOffered.status).toBe(200)
-    expect(notOffered.body.quote.orders[0].selectedSlotId).toBe(s.slot)
+    // A window that is not offered is never swapped for another one: the customer must choose again.
+    expect(notOffered.body.quote.orders[0].selectedSlotId).toBeNull()
+    expect(notOffered.body.quote.problems.map((problem: { code: string }) => problem.code)).toContain('SLOT_NOT_AVAILABLE')
   })
 
   it('rejects another customer\'s address and a malformed request', async () => {

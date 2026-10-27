@@ -1,6 +1,7 @@
 import request from 'supertest'
 import { describe, expect, it } from 'vitest'
 import { adminGet, adminSend, bearer, customerSignUp, milkOrder, shop, type Shop } from './checkout-helpers.js'
+import { LATE_PAYMENT_GRACE_MS, orderWindowClosed } from '../src/modules/payments/repository.js'
 import { ADMIN_ORIGIN, createTestApi, type TestApi } from './fakes.js'
 
 const startOrderPayment = (api: TestApi, token: string, body: object) => request(api.app).post('/customer/orders/payments').set(bearer(token)).send(body)
@@ -357,5 +358,32 @@ describe('staff view of online payments', () => {
     expect(checked.body.payment.activity.map((item: { kind: string }) => item.kind)).toEqual(['started', 'provider_order_created', 'paid', 'fulfilled'])
     expect((await adminGet(api, s.cookie, `/admin/payments?search=${merchantOrderId.slice(0, 12)}`)).body.total).toBe(1)
     expect((await adminGet(api, s.cookie, '/admin/payments/not-an-id')).status).toBe(400)
+  })
+})
+
+describe('a payment that arrives after the order-by time', () => {
+  const closes = '2026-10-24T15:30:00.000Z'
+  const closesAt = Date.parse(closes)
+  const local = (orderBy: string | null) => [{ deliveryMethod: 'local_delivery', orderBy }]
+  const at = (ms: number) => new Date(closesAt + ms)
+
+  it('is refused when the customer began paying after the order-by time', () => {
+    expect(orderWindowClosed(local(closes), at(0), at(60_000))).toBe(true)
+    expect(orderWindowClosed(local(closes), at(5_000), at(10_000))).toBe(true)
+  })
+
+  it('is still accepted when paying began in time and the confirmation is only a little late', () => {
+    expect(orderWindowClosed(local(closes), at(-60_000), at(120_000))).toBe(false)
+    expect(orderWindowClosed(local(closes), at(-1_000), at(LATE_PAYMENT_GRACE_MS - 1_000))).toBe(false)
+  })
+
+  it('is refused when paying began in time but the confirmation is later than the grace period', () => {
+    expect(orderWindowClosed(local(closes), at(-60_000), at(LATE_PAYMENT_GRACE_MS))).toBe(true)
+    expect(orderWindowClosed(local(closes), at(-60_000), at(LATE_PAYMENT_GRACE_MS + 60_000))).toBe(true)
+  })
+
+  it('does not apply to orders with no order-by time or to courier orders', () => {
+    expect(orderWindowClosed(local(null), at(-60_000), at(10 * 60 * 60_000))).toBe(false)
+    expect(orderWindowClosed([{ deliveryMethod: 'shipping', orderBy: '2026-10-24T00:00:00.000Z' }], at(-60_000), at(10 * 60 * 60_000))).toBe(false)
   })
 })
