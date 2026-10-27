@@ -1,0 +1,70 @@
+name: Set Firebase notification key
+
+# Run by hand (Actions -> "Set Firebase notification key" -> Run workflow), after adding the key file's text as the repository secret
+# FIREBASE_SERVICE_ACCOUNT_JSON (Settings -> Secrets and variables -> Actions). Puts the key on the server as a private file, points the
+# backend at it, restarts, and checks it is healthy. The old key file and settings are kept and put back if the check fails.
+# The key is never printed; only the Firebase project name is shown so you can see it is the right project.
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: shreeram-backend-deploy
+  cancel-in-progress: false
+
+jobs:
+  set-firebase-key:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check the key
+        env:
+          KEY: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JSON }}
+        run: |
+          [ -n "$KEY" ] || { echo "The secret FIREBASE_SERVICE_ACCOUNT_JSON is empty. Add it first (see the note at the top of this file)."; exit 1; }
+          printf '%s' "$KEY" | jq -e '.type == "service_account" and (.private_key | length > 100) and (.client_email | length > 5) and (.project_id | length > 3)' > /dev/null || { echo "That is not a Firebase service account key file."; exit 1; }
+          echo "Firebase project: $(printf '%s' "$KEY" | jq -r .project_id)"
+
+      - name: Configure SSH
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.EC2_SSH_KEY }}
+        run: |
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H "${{ secrets.EC2_HOST }}" >> ~/.ssh/known_hosts
+
+      - name: Put the key on the server and restart the backend
+        env:
+          KEY: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JSON }}
+        run: |
+          DEST=/var/www/html/shreeram-backend/firebase-service-account.json
+          # The key travels on standard input into a private file, so it never appears in a command line.
+          printf '%s' "$KEY" | ssh -i ~/.ssh/deploy_key "${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }}" "umask 077; cat > $DEST.new"
+          ssh -i ~/.ssh/deploy_key "${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }}" 'bash -s' <<'REMOTE'
+          set -eu
+          DEST=/var/www/html/shreeram-backend/firebase-service-account.json
+          FILE=$(systemctl cat shreeram-backend 2>/dev/null | sed -n 's/^EnvironmentFile=-\{0,1\}//p' | head -1)
+          FILE=${FILE:-/var/www/html/shreeram-backend/.env}
+          test -f "$FILE" || { echo "Settings file not found: $FILE"; exit 1; }
+          echo "Using settings file: $FILE"
+          sudo cp -p "$FILE" "$FILE.backup-firebase"
+          if [ -f "$DEST" ]; then cp -p "$DEST" "$DEST.old"; fi
+          mv -f "$DEST.new" "$DEST"
+          chmod 600 "$DEST"
+          sudo sed -i '/^FIREBASE_SERVICE_ACCOUNT_FILE=/d; /^FIREBASE_SERVICE_ACCOUNT_JSON=/d' "$FILE"
+          printf 'FIREBASE_SERVICE_ACCOUNT_FILE=%s\n' "$DEST" | sudo tee -a "$FILE" > /dev/null
+          sudo systemctl restart shreeram-backend
+          sleep 4
+          if sudo systemctl is-active --quiet shreeram-backend && curl --fail --silent --show-error http://127.0.0.1:4000/health; then
+            echo
+            echo "Done: notifications now go through the new Firebase project and the backend is healthy."
+          else
+            echo "The backend did not come back healthy. Putting the old settings back."
+            sudo cp -p "$FILE.backup-firebase" "$FILE"
+            if [ -f "$DEST.old" ]; then mv -f "$DEST.old" "$DEST"; fi
+            sudo systemctl restart shreeram-backend
+            exit 1
+          fi
+          REMOTE
