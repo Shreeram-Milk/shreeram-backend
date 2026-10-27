@@ -4,7 +4,8 @@ export type CustomerStatus = 'active' | 'blocked' | 'deleted'
 export type Customer = { id: string; phone: string | null; name: string; email: string; language: 'en' | 'gu'; customerType: 'prepaid' | 'credit'; status: CustomerStatus }
 export type StoredCode = { id: string; codeHash: string; attempts: number }
 export type NewCode = { email: string; codeHash: string; channel: 'console' | 'email'; expiresAt: Date; ip: string }
-export type NewCustomerSession = { customerId: string; tokenHash: string; deviceLabel: string; expiresAt: Date }
+export type SignInMethod = 'email_code' | 'google'
+export type NewCustomerSession = { customerId: string; tokenHash: string; deviceLabel: string; expiresAt: Date; method: SignInMethod }
 /** A customer changes their name, contact number and language. Their email is how they sign in, so it is not part of this. */
 export type ProfileUpdate = { name: string; phone: string | null; language: 'en' | 'gu' }
 
@@ -22,6 +23,12 @@ export interface CustomerAuthRepository {
   /** Finds the customer with this email or creates one. Safe when two requests race. */
   findOrCreateByEmail(email: string): Promise<{ customer: Customer; created: boolean }>
   findById(id: string): Promise<Customer | null>
+  /** The customer who signed in with this Google account (Google's permanent id for the person), unless deleted. */
+  findByGoogleSubject(subject: string): Promise<Customer | null>
+  /** Links a Google account to a customer that has none yet. False when that customer already has a (different) Google account. */
+  linkGoogle(customerId: string, subject: string): Promise<boolean>
+  /** Creates a customer from a Google sign-in. Null when another request created the same person at the same moment. */
+  createWithGoogle(input: { email: string; name: string; subject: string }): Promise<Customer | null>
   recordSignIn(customerId: string, now: Date): Promise<void>
   createSession(session: NewCustomerSession): Promise<void>
   /** The customer for a live session, or null when expired, revoked, blocked or deleted. */
@@ -89,8 +96,26 @@ export function createCustomerAuthRepository(database: Database): CustomerAuthRe
     async recordSignIn(customerId, now) {
       await database.query('update customers set last_sign_in_at = $2, updated_at = now() where id = $1', [customerId, now])
     },
-    async createSession({ customerId, tokenHash, deviceLabel, expiresAt }) {
-      await database.query('insert into customer_sessions (customer_id, token_hash, device_label, expires_at) values ($1, $2, $3, $4)', [customerId, tokenHash, deviceLabel, expiresAt])
+    async createSession({ customerId, tokenHash, deviceLabel, expiresAt, method }) {
+      // An emailed code is the column's default, so those sessions never name the column: sign-in by email keeps working even on a
+      // database that has not had migration 0031 yet. Only a Google session writes the method.
+      if (method === 'email_code') {
+        await database.query('insert into customer_sessions (customer_id, token_hash, device_label, expires_at) values ($1, $2, $3, $4)', [customerId, tokenHash, deviceLabel, expiresAt])
+        return
+      }
+      await database.query('insert into customer_sessions (customer_id, token_hash, device_label, expires_at, sign_in_method) values ($1, $2, $3, $4, $5)', [customerId, tokenHash, deviceLabel, expiresAt, method])
+    },
+    async findByGoogleSubject(subject) {
+      const { rows } = await database.query<Row>(`select ${COLUMNS} from customers where google_subject = $1 and status <> 'deleted'`, [subject])
+      return rows[0] ? toCustomer(rows[0]) : null
+    },
+    async linkGoogle(customerId, subject) {
+      const result = await database.query("update customers set google_subject = $2, updated_at = now() where id = $1 and google_subject is null and status <> 'deleted'", [customerId, subject])
+      return (result.rowCount ?? 0) === 1
+    },
+    async createWithGoogle({ email, name, subject }) {
+      const { rows } = await database.query<Row>(`insert into customers (email, name, google_subject) values ($1, $2, $3) on conflict do nothing returning ${COLUMNS}`, [email, name, subject])
+      return rows[0] ? toCustomer(rows[0]) : null
     },
     async findSession(tokenHash, now) {
       const { rows } = await database.query<Row>(

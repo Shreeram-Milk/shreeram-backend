@@ -29,6 +29,8 @@ const schema = z.object({
    */
   REVIEW_ACCOUNT_EMAIL: z.string().trim().toLowerCase().optional().transform(value => value || undefined),
   REVIEW_ACCOUNT_CODE: z.string().trim().optional().transform(value => value || undefined),
+  /** The Google web client id of the app. Present, "Continue with Google" is accepted; missing, that sign-in answers 503. It is public, not a secret. */
+  GOOGLE_WEB_CLIENT_ID: z.string().trim().optional().transform(value => value || undefined).refine(value => value === undefined || /^[0-9]+-[a-z0-9]+\.apps\.googleusercontent\.com$/.test(value), 'must look like 123456-abc.apps.googleusercontent.com'),
   /** Where the Firebase service account key file is (kept outside the code), or its contents as a secret value. Never logged. */
   FIREBASE_SERVICE_ACCOUNT_FILE: z.string().optional().transform(value => value || undefined),
   FIREBASE_SERVICE_ACCOUNT_JSON: z.string().optional().transform(value => value || undefined),

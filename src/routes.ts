@@ -69,6 +69,7 @@ import { createAuthService, type CodeSender } from './modules/auth/service.js'
 import { consoleCustomerCodeSender } from './modules/customer-auth/console-sender.js'
 import { createSmtpCustomerCodeSender } from './modules/customer-auth/email-sender.js'
 import { createCustomerAuthRepository } from './modules/customer-auth/repository.js'
+import { createGoogleIdTokenVerifier } from './integrations/google/id-token.js'
 import { createCustomerAuthRouter } from './modules/customer-auth/routes.js'
 import { createCustomerAuthService, type CustomerCodeSender } from './modules/customer-auth/service.js'
 import type { PaymentGateway } from './integrations/payments/gateway.js'
@@ -99,7 +100,7 @@ import { createMediaRepository } from './modules/media/repository.js'
 import { createAdminMediaRouter } from './modules/media/routes.js'
 import { createMediaService } from './modules/media/service.js'
 
-type Dependencies = { env: Pick<Env, 'NODE_ENV' | 'CORS_ORIGINS' | 'AUTH_SECRET' | 'MAIL_MODE' | 'SMTP_HOST' | 'SMTP_PORT' | 'SMTP_USER' | 'SMTP_PASS' | 'MAIL_FROM' | 'AWS_REGION' | 'S3_MEDIA_BUCKET' | 'PHONEPE_ENV' | 'PHONEPE_CLIENT_ID' | 'PHONEPE_CLIENT_SECRET' | 'PHONEPE_CLIENT_VERSION' | 'PHONEPE_MERCHANT_ID' | 'PHONEPE_WEBHOOK_USERNAME' | 'PHONEPE_WEBHOOK_PASSWORD' | 'PUSH_MODE' | 'FIREBASE_SERVICE_ACCOUNT_FILE' | 'FIREBASE_SERVICE_ACCOUNT_JSON' | 'REVIEW_ACCOUNT_EMAIL' | 'REVIEW_ACCOUNT_CODE'>; database: Database; sender?: CodeSender; customerSender?: CustomerCodeSender; storage?: ObjectStorage; pushSender?: PushSender }
+type Dependencies = { env: Pick<Env, 'NODE_ENV' | 'CORS_ORIGINS' | 'AUTH_SECRET' | 'MAIL_MODE' | 'SMTP_HOST' | 'SMTP_PORT' | 'SMTP_USER' | 'SMTP_PASS' | 'MAIL_FROM' | 'AWS_REGION' | 'S3_MEDIA_BUCKET' | 'PHONEPE_ENV' | 'PHONEPE_CLIENT_ID' | 'PHONEPE_CLIENT_SECRET' | 'PHONEPE_CLIENT_VERSION' | 'PHONEPE_MERCHANT_ID' | 'PHONEPE_WEBHOOK_USERNAME' | 'PHONEPE_WEBHOOK_PASSWORD' | 'PUSH_MODE' | 'FIREBASE_SERVICE_ACCOUNT_FILE' | 'FIREBASE_SERVICE_ACCOUNT_JSON' | 'REVIEW_ACCOUNT_EMAIL' | 'REVIEW_ACCOUNT_CODE' | 'GOOGLE_WEB_CLIENT_ID'>; database: Database; sender?: CodeSender; customerSender?: CustomerCodeSender; storage?: ObjectStorage; pushSender?: PushSender }
 
 /**
  * Emails the customer's sign-in code through the same SMTP settings as the admin login; otherwise prints it in the backend window
@@ -184,7 +185,7 @@ export function createRoutes({ env, database, sender, customerSender, storage, p
   const delivery = createDeliveryBrainService({ repository: createDeliveryBrainRepository(database) })
   const products = createProductService({ repository: createProductRepository(database), audit, storage: objectStorage })
   // Customer sign-in codes are emailed through the same SMTP settings as the admin login (printed in the backend window in development).
-  const customerAuth = createCustomerAuthService({ repository: createCustomerAuthRepository(database), sender: customerSender ?? chooseCustomerSender(env), secret: env.AUTH_SECRET, ...(env.REVIEW_ACCOUNT_EMAIL && env.REVIEW_ACCOUNT_CODE ? { reviewAccount: { email: env.REVIEW_ACCOUNT_EMAIL, code: env.REVIEW_ACCOUNT_CODE } } : {}) })
+  const customerAuth = createCustomerAuthService({ repository: createCustomerAuthRepository(database), sender: customerSender ?? chooseCustomerSender(env), secret: env.AUTH_SECRET, ...(env.REVIEW_ACCOUNT_EMAIL && env.REVIEW_ACCOUNT_CODE ? { reviewAccount: { email: env.REVIEW_ACCOUNT_EMAIL, code: env.REVIEW_ACCOUNT_CODE } } : {}), ...(env.GOOGLE_WEB_CLIENT_ID ? { googleVerifier: createGoogleIdTokenVerifier(env.GOOGLE_WEB_CLIENT_ID) } : {}) })
   const orderRepository = createOrderRepository(database)
   // The subscription service needs payments and payments call back into it, so the callback looks it up when it runs.
   const payments = createPaymentService({

@@ -17,6 +17,27 @@ async function customerWithPhone(api: TestApi, phone: string, token = TOKEN) {
 }
 const inbox = async (api: TestApi, token: string) => (await request(api.app).get('/customer/notifications').set(bearer(token))).body as { notifications: Array<{ id: string; event: string; title: string; titleGujarati: string; body: string; link: string | null; readAt: string | null }>; unread: number; total: number }
 
+describe('order cancelled message', () => {
+  it('tells the customer when staff cancel a one-time order, once, and not when the customer cancels it themselves', async () => {
+    const api = await createTestApi()
+    const s = await shop(api)
+    const customer = await customerWithPhone(api, '9824612398')
+    api.notificationStore.templates.set('order_cancelled', { event: 'order_cancelled', title: 'Order cancelled', titleGujarati: '', body: 'Your order {{order}} was cancelled by our team.', bodyGujarati: '', enabled: true } as never)
+    const byStaff = (await place(api, customer.token, milkOrder(s, customer.addressId, 'key-cancel-0'))).body.orders[0]
+    await adminSend(api, s.cookie, 'post', `/admin/orders/${byStaff.id}/status`, { status: 'cancelled', note: 'Out of stock' })
+    await api.notificationService.flush()
+    const list = await inbox(api, customer.token)
+    expect(list.notifications.map(item => item.event)).toEqual(['order_cancelled'])
+    expect(list.notifications[0]?.body).toBe(`Your order ${byStaff.orderNumber} was cancelled by our team.`)
+    expect(list.notifications[0]?.link).toBe(`/order-tracking?orderId=${byStaff.id}`)
+    // The customer's own cancellation is not news to them.
+    const byCustomer = (await place(api, customer.token, milkOrder(s, customer.addressId, 'key-cancel-1'))).body.orders[0]
+    await request(api.app).post(`/customer/orders/${byCustomer.id}/cancel`).set(bearer(customer.token)).send({})
+    await api.notificationService.flush()
+    expect((await inbox(api, customer.token)).notifications).toHaveLength(1)
+  })
+})
+
 describe('order placed message', () => {
   it('tells the customer once when an order is placed, on credit or paid online, and does nothing while the message is off', async () => {
     const api = await createTestApi()

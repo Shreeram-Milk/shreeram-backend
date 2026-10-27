@@ -3,7 +3,7 @@ import type { z } from 'zod'
 import { AppError } from '../../http/errors.js'
 import { createRateLimiter } from '../../http/rate-limit.js'
 import { validate } from '../../http/validate.js'
-import { requestCodeBody, updateProfileBody, verifyCodeBody } from './schema.js'
+import { googleSignInBody, requestCodeBody, updateProfileBody, verifyCodeBody } from './schema.js'
 import { toProfile, type CustomerAuthService } from './service.js'
 import type { Customer } from './repository.js'
 
@@ -48,6 +48,12 @@ export function createCustomerAuthRouter({ auth }: { auth: CustomerAuthService }
   router.post('/auth/verify', codeLimiter, validate('body', verifyCodeBody), async (request: Request, response: Response) => {
     const body = request.body as z.infer<typeof verifyCodeBody>
     const { token, expiresAt, customer, isNewCustomer } = await auth.verifyCode(body.email, body.code, body.deviceLabel)
+    response.json({ token, expiresAt: expiresAt.toISOString(), customer, isNewCustomer })
+  })
+
+  router.post('/auth/google', codeLimiter, validate('body', googleSignInBody), async (request: Request, response: Response) => {
+    const body = request.body as z.infer<typeof googleSignInBody>
+    const { token, expiresAt, customer, isNewCustomer } = await auth.signInWithGoogle(body.idToken, body.deviceLabel)
     response.json({ token, expiresAt: expiresAt.toISOString(), customer, isNewCustomer })
   })
 

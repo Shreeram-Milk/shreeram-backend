@@ -29,6 +29,7 @@ import type { CustomerRepository } from '../src/modules/customers/repository.js'
 import { createAdminCustomerRouter } from '../src/modules/customers/routes.js'
 import { createCustomerService } from '../src/modules/customers/service.js'
 import type { Customer, CustomerAuthRepository } from '../src/modules/customer-auth/repository.js'
+import type { GoogleIdTokenVerifier } from '../src/integrations/google/id-token.js'
 import { createCustomerAuthRouter } from '../src/modules/customer-auth/routes.js'
 import { createCustomerAuthService, type CustomerCodeSender } from '../src/modules/customer-auth/service.js'
 import type { Banner, BannerRepository } from '../src/modules/banners/repository.js'
@@ -159,8 +160,9 @@ type FakeCustomerCode = { id: string; email: string; codeHash: string; attempts:
 /** In-memory customers, sign-in codes and sessions, behaving like the Postgres version. */
 export function createFakeCustomerAuthRepository(now: () => Date) {
   const customers = new Map<string, Customer>()
+  const googleSubjects = new Map<string, string>()
   const codes: FakeCustomerCode[] = []
-  const sessions: Array<{ id: string; customerId: string; tokenHash: string; expiresAt: Date; revoked: boolean }> = []
+  const sessions: Array<{ id: string; customerId: string; tokenHash: string; expiresAt: Date; revoked: boolean; method: string }> = []
   const repository: CustomerAuthRepository = {
     async countCodes({ email, ip, since }) {
       const matching = codes.filter(code => code.createdAt > since && (email === undefined || code.email === email) && (ip === undefined || code.ip === ip))
@@ -186,7 +188,16 @@ export function createFakeCustomerAuthRepository(now: () => Date) {
     },
     async findById(id) { return customers.get(id) ?? null },
     async recordSignIn() {},
-    async createSession({ customerId, tokenHash, expiresAt }) { sessions.push({ id: randomUUID(), customerId, tokenHash, expiresAt, revoked: false }) },
+    async createSession({ customerId, tokenHash, expiresAt, method }) { sessions.push({ id: randomUUID(), customerId, tokenHash, expiresAt, revoked: false, method }) },
+    async findByGoogleSubject(subject) { const id = [...googleSubjects].find(([, value]) => value === subject)?.[0]; const customer = id ? customers.get(id) : undefined; return customer && customer.status !== 'deleted' ? customer : null },
+    async linkGoogle(customerId, subject) { if (googleSubjects.has(customerId)) return false; googleSubjects.set(customerId, subject); return true },
+    async createWithGoogle({ email, name, subject }) {
+      if ([...customers.values()].some(customer => customer.email.toLowerCase() === email && customer.status !== 'deleted')) return null
+      const customer: Customer = { id: randomUUID(), phone: null, name, email, language: 'en', customerType: 'prepaid', status: 'active' }
+      customers.set(customer.id, customer)
+      googleSubjects.set(customer.id, subject)
+      return customer
+    },
     async findSession(tokenHash, at) {
       const session = sessions.find(item => item.tokenHash === tokenHash && !item.revoked && item.expiresAt > at)
       const customer = session ? customers.get(session.customerId) : undefined
@@ -203,10 +214,11 @@ export function createFakeCustomerAuthRepository(now: () => Date) {
     async anonymise(customerId) {
       const customer = customers.get(customerId)
       if (customer) Object.assign(customer, { status: 'deleted', phone: null, name: '', email: '' })
+      googleSubjects.delete(customerId)
       for (const session of sessions) if (session.customerId === customerId) session.revoked = true
     },
   }
-  return { repository, customers, codes, sessions }
+  return { repository, customers, codes, sessions, googleSubjects }
 }
 
 /** In-memory tickets and messages, behaving like the Postgres version (same ordering, same filters, same scoping). */
@@ -1162,7 +1174,7 @@ export function createFakeGateway() {
   return { gateway, checkouts, control, set }
 }
 
-export async function createTestApi(options: { clock?: ReturnType<typeof createClock>; withAdmin?: boolean } = {}) {
+export async function createTestApi(options: { clock?: ReturnType<typeof createClock>; withAdmin?: boolean; googleVerifier?: GoogleIdTokenVerifier } = {}) {
   const clock = options.clock ?? createClock()
   const auth = createFakeAuthRepository()
   const mediaRepository = createFakeMediaRepository()
@@ -1195,7 +1207,7 @@ export async function createTestApi(options: { clock?: ReturnType<typeof createC
   const sender: CodeSender = { async sendLoginCode(email, code) { sentCodes.push({ email, code }) } }
   const auditWriter = async (entry: AuditEntry) => { audit.push(entry) }
   const authService = createAuthService({ repository: auth.repository, sender, audit: auditWriter, secret: SECRET, now: clock.now })
-  const customerAuthService = createCustomerAuthService({ repository: customerAuth.repository, sender: customerCodeSender, secret: SECRET, now: clock.now })
+  const customerAuthService = createCustomerAuthService({ repository: customerAuth.repository, sender: customerCodeSender, secret: SECRET, now: clock.now, ...(options.googleVerifier ? { googleVerifier: options.googleVerifier } : {}) })
   const customerAddressService = createCustomerAddressService({ repository: addressStore.repository, delivery: { servedOptions: async pin => (servedPins.has(pin) ? [{ optionId: 'option', name: 'Local', deliveryMethod: 'local_delivery', locality: '', slots: [] }] : []) } })
   const supportService = createSupportTicketService({ repository: supportStore.repository, audit: auditWriter, now: clock.now })
   const mediaService = createMediaService({ repository: mediaRepository, storage, audit: auditWriter, now: clock.now })

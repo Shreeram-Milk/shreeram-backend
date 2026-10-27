@@ -59,7 +59,7 @@ const notFoundOrder = () => new AppError(404, 'ORDER_NOT_FOUND', 'That order doe
 export function createOrderService({ repository, addresses, delivery, audit, payments, offers, notifier = noopNotifier, now = () => new Date() }: Dependencies) {
   /**
    * After staff change an order's status: out for delivery and delivered tell the customer; a plan day cancelled by staff tells them it
-   * was skipped (it is added at the end). The same order and status is announced only once, however many times the button is pressed.
+   * was skipped (it is added at the end), and a one-time order cancelled by staff tells them it was cancelled. The same order and status is announced only once, however many times the button is pressed.
    */
   async function announce(orderId: string, status: string): Promise<void> {
     if (status !== 'out_for_delivery' && status !== 'delivered' && status !== 'cancelled') return
@@ -69,7 +69,13 @@ export function createOrderService({ repository, addresses, delivery, audit, pay
       const product = order.items[0]?.productName ?? ''
       const productGujarati = order.items[0]?.productNameGu ?? ''
       if (status === 'cancelled') {
-        if (!order.subscriptionId) return
+        if (!order.subscriptionId) {
+          await notifier.notify({
+            event: 'order_cancelled', customerId: order.customerId, vars: { order: order.orderNumber, product }, varsGujarati: { product: productGujarati },
+            link: `/order-tracking?orderId=${orderId}`, dedupeKey: `order:${orderId}:cancelled`,
+          })
+          return
+        }
         await notifier.notify({
           event: 'day_skipped', customerId: order.customerId, vars: { product, date: formatDay(order.deliveryDate), window: order.slot?.name ?? '' },
           varsGujarati: { product: productGujarati, date: formatDayGujarati(order.deliveryDate) },

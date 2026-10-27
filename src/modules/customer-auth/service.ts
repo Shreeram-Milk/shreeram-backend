@@ -1,6 +1,7 @@
 import { AppError } from '../../http/errors.js'
 import { hashCode, newCode, newToken, safeEqual, sha256 } from '../auth/crypto.js'
-import type { Customer, CustomerAuthRepository, NewCode } from './repository.js'
+import type { GoogleIdTokenVerifier } from '../../integrations/google/id-token.js'
+import type { Customer, CustomerAuthRepository, NewCode, SignInMethod } from './repository.js'
 
 /** Delivers the one-time sign-in code to a customer's email. Development prints it; production sends it by email (SMTP). */
 export interface CustomerCodeSender {
@@ -27,15 +28,29 @@ type Dependencies = {
   repository: CustomerAuthRepository; sender: CustomerCodeSender; secret: string; now?: () => Date
   /** A fixed demo sign-in for the store reviewer (see the REVIEW_ACCOUNT settings). Its code is not emailed; the same limits and expiry apply. */
   reviewAccount?: { email: string; code: string }
+  /** Checks a Google ID token. Left out, "Continue with Google" is not available and says so. */
+  googleVerifier?: GoogleIdTokenVerifier
 }
 
 /**
  * Customer sign-in with a code sent to their email. Step 1 sends a code. Step 2 checks it and opens a session; the customer
  * record is created only then, so asking for codes never fills the customer list. Wrong answers look the same whatever the reason.
  */
-export function createCustomerAuthService({ repository, sender, secret, reviewAccount, now = () => new Date() }: Dependencies) {
+export function createCustomerAuthService({ repository, sender, secret, reviewAccount, googleVerifier, now = () => new Date() }: Dependencies) {
   const invalidCode = () => new AppError(401, 'INVALID_CODE', 'The code is not correct or has expired.')
   const blocked = () => new AppError(403, 'ACCOUNT_BLOCKED', 'This account cannot sign in. Please contact support.')
+
+  type SignedIn = { token: string; expiresAt: Date; customer: CustomerProfile; isNewCustomer: boolean }
+
+  /** The last step of every sign-in: a blocked customer is refused, otherwise a long-lived session is opened for this phone. */
+  async function openSession(customer: Customer, created: boolean, method: SignInMethod, deviceLabel: string): Promise<SignedIn> {
+    if (customer.status !== 'active') throw blocked()
+    await repository.recordSignIn(customer.id, now())
+    const token = newToken()
+    const expiresAt = new Date(now().getTime() + days(SESSION_DAYS))
+    await repository.createSession({ customerId: customer.id, tokenHash: sha256(token), deviceLabel: deviceLabel.slice(0, 100), expiresAt, method })
+    return { token, expiresAt, customer: toProfile(customer), isNewCustomer: created }
+  }
 
   return {
     async requestCode(email: string, ip: string): Promise<void> {
@@ -60,7 +75,7 @@ export function createCustomerAuthService({ repository, sender, secret, reviewAc
       }
     },
 
-    async verifyCode(email: string, code: string, deviceLabel: string): Promise<{ token: string; expiresAt: Date; customer: CustomerProfile; isNewCustomer: boolean }> {
+    async verifyCode(email: string, code: string, deviceLabel: string): Promise<SignedIn> {
       const stored = await repository.findActiveCode(email, now())
       if (!stored || stored.attempts >= CODE_MAX_ATTEMPTS) throw invalidCode()
       if (!safeEqual(hashCode(secret, email, code), stored.codeHash)) {
@@ -70,12 +85,35 @@ export function createCustomerAuthService({ repository, sender, secret, reviewAc
       // Spending the code is atomic: if two requests race with the same correct code, only one gets a session.
       if (!(await repository.consumeCode(stored.id, now()))) throw invalidCode()
       const { customer, created } = await repository.findOrCreateByEmail(email)
-      if (customer.status !== 'active') throw blocked()
-      await repository.recordSignIn(customer.id, now())
-      const token = newToken()
-      const expiresAt = new Date(now().getTime() + days(SESSION_DAYS))
-      await repository.createSession({ customerId: customer.id, tokenHash: sha256(token), deviceLabel: deviceLabel.slice(0, 100), expiresAt })
-      return { token, expiresAt, customer: toProfile(customer), isNewCustomer: created }
+      return openSession(customer, created, 'email_code', deviceLabel)
+    },
+
+    /**
+     * "Continue with Google". The phone sends the ID token Google gave it; we check it (signature, expiry, our own app id) and require a
+     * verified email. The same person is found by Google's permanent id; a customer who first signed in with an emailed code and uses the
+     * same Gmail is linked to that same account, never duplicated.
+     */
+    async signInWithGoogle(idToken: string, deviceLabel: string): Promise<SignedIn> {
+      if (!googleVerifier) throw new AppError(503, 'GOOGLE_SIGN_IN_UNAVAILABLE', 'Google sign-in is not available right now. Please use your email.')
+      const identity = await googleVerifier(idToken)
+      if (!identity.emailVerified) throw new AppError(403, 'GOOGLE_EMAIL_NOT_VERIFIED', 'Your Google email is not verified. Please use another way to sign in.')
+      let created = false
+      let customer = await repository.findByGoogleSubject(identity.subject)
+      if (!customer) {
+        const byEmail = await repository.findByEmail(identity.email)
+        if (byEmail) {
+          // The same person by email. If that account already belongs to another Google account, never merge them.
+          if (!(await repository.linkGoogle(byEmail.id, identity.subject))) throw new AppError(409, 'GOOGLE_ACCOUNT_CONFLICT', 'This email is already linked to a different Google account. Please sign in with your email code.')
+          customer = byEmail
+        } else {
+          customer = await repository.createWithGoogle({ email: identity.email, name: identity.name, subject: identity.subject })
+          created = customer !== null
+          // Two taps at the same moment: the other request made the account first, so use it.
+          customer ??= await repository.findByGoogleSubject(identity.subject)
+          if (!customer) throw new Error('Customer could not be created.')
+        }
+      }
+      return openSession(customer, created, 'google', deviceLabel)
     },
 
     /** Who is signed in for this token, or null if it is missing, expired, revoked, or the customer was blocked or deleted. */

@@ -20,30 +20,67 @@ function loadServiceAccount({ serviceAccountFile, serviceAccountJson }: FcmSetti
   return parsed as Record<string, unknown>
 }
 
-/** Sends through Firebase Cloud Messaging (free). Never logs a token or the message. */
-export function createFcmSender(settings: FcmSettings): PushSender {
+/** Provider errors that are temporary (Firebase busy or rate-limiting): the same phone is tried once more a moment later. */
+const TRANSIENT_CODES = new Set(['messaging/internal-error', 'messaging/server-unavailable', 'messaging/message-rate-exceeded', 'messaging/device-message-rate-exceeded'])
+
+/** The one part of Firebase's messaging client the sender uses, so tests can stand in for it. */
+export type MulticastClient = {
+  sendEachForMulticast(message: { tokens: string[]; notification: { title: string; body: string }; data: Record<string, string>; android: { priority: 'high' | 'normal'; notification: { channelId: string } } }): Promise<{ responses: Array<{ success: boolean; error?: { code: string } }> }>
+}
+type SenderOptions = { client?: MulticastClient; retryDelayMs?: number }
+
+/**
+ * Sends through Firebase Cloud Messaging (free). Never logs a token or the message. One bad moment never costs the rest: a batch that
+ * fails outright, and phones that failed for a temporary reason, are tried once more; a batch that still fails is skipped (and noted
+ * in the log) so every later batch is still sent.
+ */
+export function createFcmSender(settings: FcmSettings, { client, retryDelayMs = 1500 }: SenderOptions = {}): PushSender {
   let app: App | undefined
-  const messaging = () => {
+  const messaging = (): MulticastClient => {
+    if (client) return client
     app ??= getApps().find(existing => existing.name === APP_NAME) ?? initializeApp({ credential: cert(loadServiceAccount(settings) as Parameters<typeof cert>[0]) }, APP_NAME)
-    return getMessaging(app)
+    return getMessaging(app) as unknown as MulticastClient
   }
+  const pause = () => (retryDelayMs > 0 ? new Promise<void>(resolve => setTimeout(resolve, retryDelayMs)) : Promise.resolve())
+
   return {
     channel: 'fcm',
     async send(tokens: string[], message: PushMessage): Promise<PushResult> {
       const result: PushResult = { sent: 0, invalidTokens: [] }
+      const payload = (batch: string[]) => ({
+        tokens: batch,
+        notification: { title: message.title, body: message.body },
+        data: (message.link ? { link: message.link } : {}) as Record<string, string>,
+        // Offers are not urgent: normal priority, so they never wake a sleeping phone the way a delivery message may.
+        android: { priority: (message.channel === 'deliveries' ? 'high' : 'normal') as 'high' | 'normal', notification: { channelId: message.channel } },
+      })
+      /** Sends one batch and returns the phones that failed for a temporary reason (all of them when the whole request failed). */
+      const attempt = async (batch: string[]): Promise<string[] | 'failed'> => {
+        let response: Awaited<ReturnType<MulticastClient['sendEachForMulticast']>>
+        try {
+          response = await messaging().sendEachForMulticast(payload(batch))
+        } catch {
+          return 'failed'
+        }
+        const again: string[] = []
+        response.responses.forEach((outcome, index) => {
+          const token = batch[index] as string
+          if (outcome.success) result.sent += 1
+          else if (outcome.error && DEAD_TOKEN_CODES.has(outcome.error.code)) result.invalidTokens.push(token)
+          else if (outcome.error && TRANSIENT_CODES.has(outcome.error.code)) again.push(token)
+        })
+        return again
+      }
+
       for (let start = 0; start < tokens.length; start += BATCH_SIZE) {
         const batch = tokens.slice(start, start + BATCH_SIZE)
-        const response = await messaging().sendEachForMulticast({
-          tokens: batch,
-          notification: { title: message.title, body: message.body },
-          data: message.link ? { link: message.link } : {},
-          // Offers are not urgent: normal priority, so they never wake a sleeping phone the way a delivery message may.
-          android: { priority: message.channel === 'deliveries' ? 'high' : 'normal', notification: { channelId: message.channel } },
-        })
-        response.responses.forEach((outcome, index) => {
-          if (outcome.success) result.sent += 1
-          else if (outcome.error && DEAD_TOKEN_CODES.has(outcome.error.code)) result.invalidTokens.push(batch[index] as string)
-        })
+        let retry = await attempt(batch)
+        if (retry === 'failed') retry = batch
+        if (retry.length > 0) {
+          await pause()
+          const second = await attempt(retry)
+          if (second === 'failed' || second.length > 0) console.warn(JSON.stringify({ level: 'warn', message: 'some phones could not be reached after a retry', phones: second === 'failed' ? retry.length : second.length }))
+        }
       }
       return result
     },

@@ -33,6 +33,8 @@ export const emailSchema = z.string().trim().toLowerCase().max(200, 'That email 
 
 const codeSchema = z.string().trim().regex(/^\d{6}$/, 'Enter the 6-digit code.')
 
+/** The ID token the phone got from Google. Long, but never anywhere near 4 KB. */
+export const googleSignInBody = z.object({ idToken: z.string().trim().min(20).max(4096), deviceLabel: z.string().trim().max(100).default('') })
 export const requestCodeBody = z.object({ email: emailSchema })
 export const verifyCodeBody = z.object({ email: emailSchema, code: codeSchema, deviceLabel: z.string().trim().max(100).default('') })
 /** What a customer may change about themselves. Their email is how they sign in, so it is not changed here. */
