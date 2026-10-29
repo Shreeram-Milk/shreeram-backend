@@ -1,5 +1,7 @@
 import { addDays, indiaClock } from '../delivery-brain/rules.js'
+import { AppError } from '../../http/errors.js'
 import type { ProductionPlanRepository } from './repository.js'
+import { buildRiderSheet, type RiderSheet } from './rider-sheet.js'
 import { buildProductionPlan, type PlanWarning, type ProductionPlan } from './rules.js'
 
 /** How old the last delivery-job pass may be before the plan says the subscription numbers may be out of date. */
@@ -41,6 +43,14 @@ export function createProductionPlanService({ repository, now = () => new Date()
       const instant = now()
       const plan = buildProductionPlan(date, rows, closings, instant)
       return { ...plan, warnings: planWarnings(date, instant, horizonDays, jobStatus?.()) }
+    },
+
+    /** Who gets what in one delivery window, by PIN code, for the riders. Fresh every time, with the same warnings as the plan. */
+    async riderSheetFor(date: string, slotId: string): Promise<RiderSheet> {
+      const { slot, stops, closing, truncated } = await repository.riderStopsFor(date, slotId)
+      if (!slot) throw new AppError(404, 'SLOT_NOT_FOUND', 'That delivery window does not exist.')
+      const instant = now()
+      return buildRiderSheet({ date, slot, stops, closing, truncated, warnings: planWarnings(date, instant, horizonDays, jobStatus?.()), now: instant })
     },
   }
 }

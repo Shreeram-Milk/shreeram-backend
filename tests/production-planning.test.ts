@@ -1,5 +1,6 @@
 import request from 'supertest'
 import { describe, expect, it } from 'vitest'
+import { buildRiderSheet, type RiderStopRow } from '../src/modules/production-planning/rider-sheet.js'
 import { buildProductionPlan, type DemandRow } from '../src/modules/production-planning/rules.js'
 import { planWarnings } from '../src/modules/production-planning/service.js'
 import { ADMIN_ORIGIN, PASSWORD, createTestApi } from './fakes.js'
@@ -103,5 +104,70 @@ describe('plan warnings', () => {
     expect(planWarnings('2026-10-25', now, 3, null).map(warning => warning.code)).toEqual(['SUBSCRIPTION_JOB_STALE'])
     expect(planWarnings('2026-10-25', now, 3, { at: '2026-10-24T05:00:00.000Z', failures: 0 }).map(warning => warning.code)).toEqual(['SUBSCRIPTION_JOB_STALE'])
     expect(planWarnings('2026-10-25', now, 3, { ...fresh, failures: 2 }).map(warning => warning.code)).toEqual(['SUBSCRIPTION_JOB_FAILING'])
+  })
+})
+
+const stop = (extra: Partial<RiderStopRow>): RiderStopRow => ({
+  orderId: 'o', orderNumber: 'SR-1', recipientName: 'Patel', recipientPhone: '9825000000', addressLine1: 'B-2', addressLine2: 'Shyam Flats', landmark: '', city: 'Ahmedabad',
+  pinCode: '380015', doorstepNote: '', kind: 'subscription', items: [{ productId: 'cow', variantId: 'half', productName: 'Cow Milk', variantName: '500 ml', quantity: 1 }], ...extra,
+})
+const morning = { slotId: '00000000-0000-4000-8000-000000000001', name: 'Morning', startTime: '06:00', endTime: '08:00' }
+
+describe('rider sheet', () => {
+  const sheet = (stops: RiderStopRow[], now = '2026-10-14T16:00:00.000Z') =>
+    buildRiderSheet({ date: '2026-10-15', slot: morning, stops, closing: { slotId: morning.slotId, closesAt: '2026-10-14T15:30:00.000Z' }, truncated: false, warnings: [], now: new Date(now) })
+
+  it('puts each PIN code together, lowest first, so a rider never goes back to an area', () => {
+    const result = sheet([stop({ orderId: 'a', pinCode: '380054' }), stop({ orderId: 'b', pinCode: '380015' }), stop({ orderId: 'c', pinCode: '380054' }), stop({ orderId: 'd', pinCode: '380015' })])
+    expect(result.areas.map(area => [area.pinCode, area.stops.map(item => item.orderId)])).toEqual([['380015', ['b', 'd']], ['380054', ['a', 'c']]])
+    expect(result.stopCount).toBe(4)
+  })
+
+  it('keeps one society together and counts flat numbers in order, whatever the case and spacing customers typed', () => {
+    const result = sheet([
+      stop({ orderId: 'b10', addressLine1: 'B-10', addressLine2: 'Shyam Flats' }),
+      stop({ orderId: 'ram', addressLine1: '4', addressLine2: 'Ramdev Society' }),
+      stop({ orderId: 'b2', addressLine1: 'B-2', addressLine2: 'shyam  flats ' }),
+    ])
+    expect(result.areas[0]?.stops.map(item => item.orderId)).toEqual(['ram', 'b2', 'b10'])
+  })
+
+  it('adds up every product and size to load, per area and for the whole sheet', () => {
+    const buffalo = { productId: 'buf', variantId: 'half', productName: 'Buffalo Milk', variantName: '500 ml', quantity: 2 }
+    const litre = { productId: 'cow', variantId: 'litre', productName: 'Cow Milk', variantName: '1 L', quantity: 1 }
+    const result = sheet([
+      stop({ orderId: 'a', items: [{ ...litre }, { ...buffalo }] }),
+      stop({ orderId: 'b' }),
+      stop({ orderId: 'c', pinCode: '380054', items: [{ ...buffalo, quantity: 3 }] }),
+    ])
+    expect(result.areas[0]?.load.map(line => [line.productName, line.variantName, line.quantity])).toEqual([['Buffalo Milk', '500 ml', 2], ['Cow Milk', '1 L', 1], ['Cow Milk', '500 ml', 1]])
+    expect(result.load.map(line => [line.productName, line.variantName, line.quantity])).toEqual([['Buffalo Milk', '500 ml', 5], ['Cow Milk', '1 L', 1], ['Cow Milk', '500 ml', 1]])
+  })
+
+  it('is open until the window closes and final from then on, like production planning', () => {
+    expect(sheet([stop({})], '2026-10-14T15:29:00.000Z').status).toBe('open')
+    expect(sheet([stop({})], '2026-10-14T15:30:00.000Z').status).toBe('final')
+  })
+})
+
+describe('GET /admin/production-planning/rider-sheet', () => {
+  it('needs a signed-in admin, a date and a window, and says when the window does not exist', async () => {
+    const api = await createTestApi()
+    expect((await request(api.app).get(`/admin/production-planning/rider-sheet?date=2026-10-15&slotId=${morning.slotId}`).set('Origin', ADMIN_ORIGIN)).status).toBe(401)
+    await request(api.app).post('/admin/auth/login').set('Origin', ADMIN_ORIGIN).send({ email: 'owner@example.com', password: PASSWORD })
+    const verified = await request(api.app).post('/admin/auth/verify').set('Origin', ADMIN_ORIGIN).send({ email: 'owner@example.com', code: api.sentCodes.at(-1)?.code })
+    const cookie = ((verified.headers['set-cookie'] as unknown as string[])[0] ?? '').split(';')[0] ?? ''
+    const get = (query: string) => request(api.app).get(`/admin/production-planning/rider-sheet${query}`).set('Cookie', cookie).set('Origin', ADMIN_ORIGIN)
+    expect((await get('?date=2026-10-15')).status).toBe(400)
+    expect((await get('?date=2026-10-15&slotId=morning')).status).toBe(400)
+    const missing = await get(`?date=2026-10-15&slotId=${morning.slotId}`)
+    expect(missing.status).toBe(404)
+    expect(missing.body.error.code).toBe('SLOT_NOT_FOUND')
+    api.riderStops.slot = morning
+    api.riderStops.stops.push(stop({}))
+    const response = await get(`?date=2026-10-15&slotId=${morning.slotId}`)
+    expect(response.status).toBe(200)
+    expect(response.headers['cache-control']).toBe('no-store')
+    expect(response.body.sheet).toMatchObject({ slot: { name: 'Morning' }, stopCount: 1, areas: [{ pinCode: '380015' }] })
   })
 })

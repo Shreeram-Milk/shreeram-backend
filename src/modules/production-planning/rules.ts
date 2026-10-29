@@ -39,7 +39,7 @@ export type ProductionPlan = { date: string; slots: PlannedSlot[]; warnings: Pla
  * A window is final once its order-by time has passed. A window with no order-by time (no cut-off rule) is final once its delivery
  * day has begun, the same moment customers can no longer cancel it.
  */
-function isFinal(date: string, closesAt: string | null, now: Date): boolean {
+export function isFinal(date: string, closesAt: string | null, now: Date): boolean {
   const closes = closesAt ? new Date(closesAt) : instantAt(date, '00:00')
   return now.getTime() >= closes.getTime()
 }

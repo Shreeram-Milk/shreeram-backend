@@ -90,6 +90,7 @@ import { createCreditService } from '../src/modules/credit/service.js'
 import type { CreditAccount, CreditRepository, LedgerEntry, PaymentRequest } from '../src/modules/credit/repository.js'
 import { createAdminProductionPlanRouter } from '../src/modules/production-planning/routes.js'
 import { createProductionPlanService } from '../src/modules/production-planning/service.js'
+import type { ProductionPlanRepository } from '../src/modules/production-planning/repository.js'
 import type { DemandRow, SlotClosing } from '../src/modules/production-planning/rules.js'
 import { canReturnMoney, canTransition, customerCanCancel, releasesMoney, withinCreditLimit, type CheckoutVariant, type OrderStatus } from '../src/modules/orders/rules.js'
 import type { AdminOrderView, NewOrder, OrderRepository, OrderView } from '../src/modules/orders/repository.js'
@@ -1236,7 +1237,9 @@ export async function createTestApi(options: { clock?: ReturnType<typeof createC
   const adjustmentService = createAdjustmentService({ repository: adjustmentStore.repository, audit: auditWriter, now: clock.now, notifier })
   /** The demand a test wants production planning to see. */
   const productionDemand: { rows: DemandRow[]; closings: SlotClosing[] } = { rows: [], closings: [] }
-  const productionPlanService = createProductionPlanService({ repository: { demandFor: async () => productionDemand }, now: clock.now })
+  /** The houses a test wants the rider sheet to see. */
+  const riderStops: Awaited<ReturnType<ProductionPlanRepository['riderStopsFor']>> = { slot: null, stops: [], closing: null, truncated: false }
+  const productionPlanService = createProductionPlanService({ repository: { demandFor: async () => productionDemand, riderStopsFor: async () => riderStops }, now: clock.now })
   const offerService = createOfferService({ repository: offerStore.repository, audit: auditWriter, now: clock.now })
   const orderService = createOrderService({
     repository: orderStore.repository, addresses: addressStore.repository, audit: auditWriter, now: clock.now, payments: paymentService, notifier, offers: offerService,
@@ -1315,7 +1318,7 @@ export async function createTestApi(options: { clock?: ReturnType<typeof createC
       router.use('/public/banners', createPublicBannerRouter({ banners: bannerService }))
     },
   })
-  return { app, clock, subscriptions: subscriptionStore, subscriptionService, slotRuleAnswers, payments: paymentStore, phonePe, paymentService, adjustments: adjustmentStore, credit: creditStore, productionDemand, orders: orderStore, deliveryAnswers, auth, banners: bannersRepository, media: mediaRepository, onboarding: onboardingRepository, settings: settingsRepository, help: helpRepository, policies: policyRepository, deliverySlots: deliverySlotRepository, cutoffRules: cutoffRuleRepository, serviceAreas: serviceAreaRepository, categories: categoryRepository, trialPlans: trialPlanRepository, subscriptionRules: subscriptionRuleRepository, products: productRepository, storage, audit, sentCodes, customerAuth, addressStore, supportStore, servedPins, sentCustomerCodes, admin, notificationStore, notificationService, dashboardCalls, offerStore }
+  return { app, clock, subscriptions: subscriptionStore, subscriptionService, slotRuleAnswers, payments: paymentStore, phonePe, paymentService, adjustments: adjustmentStore, credit: creditStore, productionDemand, riderStops, orders: orderStore, deliveryAnswers, auth, banners: bannersRepository, media: mediaRepository, onboarding: onboardingRepository, settings: settingsRepository, help: helpRepository, policies: policyRepository, deliverySlots: deliverySlotRepository, cutoffRules: cutoffRuleRepository, serviceAreas: serviceAreaRepository, categories: categoryRepository, trialPlans: trialPlanRepository, subscriptionRules: subscriptionRuleRepository, products: productRepository, storage, audit, sentCodes, customerAuth, addressStore, supportStore, servedPins, sentCustomerCodes, admin, notificationStore, notificationService, dashboardCalls, offerStore }
 }
 
 export type TestApi = Awaited<ReturnType<typeof createTestApi>>
