@@ -34,6 +34,33 @@ const natural = (a: string, b: string) => normalized(a).localeCompare(normalized
 const visitingOrder = (a: RiderStopRow, b: RiderStopRow) =>
   natural(a.addressLine2, b.addressLine2) || natural(a.addressLine1, b.addressLine1) || natural(a.recipientName, b.recipientName) || a.orderNumber.localeCompare(b.orderNumber)
 
+/** Same person, phone and address: one house, however many orders they placed for this window. */
+const houseKey = (stop: RiderStopRow) =>
+  [stop.recipientName, stop.recipientPhone, stop.addressLine1, stop.addressLine2, stop.landmark, stop.pinCode].map(normalized).join('|')
+/** A trial is worth flagging to the rider over a subscription, and a subscription over a one-off order. */
+const KIND_WEIGHT: Record<RiderStopRow['kind'], number> = { trial: 2, subscription: 1, one_time: 0 }
+
+/**
+ * Orders for the same house in one window become one stop, so the rider sees one row with everything to hand over (quantities of
+ * the same product size added up). The first order's number and note are kept. A different address stays a separate stop.
+ */
+function combineHouses(stops: RiderStopRow[]): RiderStopRow[] {
+  const houses = new Map<string, RiderStopRow>()
+  for (const stop of stops) {
+    const key = houseKey(stop)
+    const house = houses.get(key)
+    if (!house) { houses.set(key, { ...stop, items: stop.items.map(item => ({ ...item })) }); continue }
+    for (const item of stop.items) {
+      const same = house.items.find(line => line.productId === item.productId && line.variantId === item.variantId)
+      if (same) same.quantity += item.quantity
+      else house.items.push({ ...item })
+    }
+    if (KIND_WEIGHT[stop.kind] > KIND_WEIGHT[house.kind]) house.kind = stop.kind
+    if (!house.doorstepNote) house.doorstepNote = stop.doorstepNote
+  }
+  return [...houses.values()]
+}
+
 function loadOf(stops: RiderStopRow[]): LoadLine[] {
   const lines = new Map<string, LoadLine>()
   for (const stop of stops) for (const item of stop.items) {
@@ -47,11 +74,13 @@ function loadOf(stops: RiderStopRow[]): LoadLine[] {
 
 /**
  * The rider sheet for one delivery window: every open local delivery, one section per PIN code (lowest first), houses in
- * visiting order, and what to load for each section and for the whole sheet. Pure, so it is easy to test.
+ * visiting order (several orders for one house are one stop), and what to load for each section and for the whole sheet. Pure, so
+ * it is easy to test.
  */
 export function buildRiderSheet(input: { date: string; slot: RiderSheetSlot; stops: RiderStopRow[]; closing: SlotClosing | null; truncated: boolean; warnings: PlanWarning[]; now: Date }): RiderSheet {
+  const houses = combineHouses(input.stops)
   const byPin = new Map<string, RiderStopRow[]>()
-  for (const stop of input.stops) byPin.set(stop.pinCode, [...(byPin.get(stop.pinCode) ?? []), stop])
+  for (const stop of houses) byPin.set(stop.pinCode, [...(byPin.get(stop.pinCode) ?? []), stop])
   const areas = [...byPin]
     .sort(([a], [b]) => a.localeCompare(b, 'en-IN', { numeric: true }))
     .map(([pinCode, stops]): RiderArea => {
@@ -61,6 +90,6 @@ export function buildRiderSheet(input: { date: string; slot: RiderSheetSlot; sto
   const closesAt = input.closing?.closesAt ?? null
   return {
     date: input.date, slot: input.slot, status: isFinal(input.date, closesAt, input.now) ? 'final' : 'open', closesAt,
-    areas, load: loadOf(input.stops), stopCount: input.stops.length, truncated: input.truncated, warnings: input.warnings,
+    areas, load: loadOf(houses), stopCount: houses.length, truncated: input.truncated, warnings: input.warnings,
   }
 }

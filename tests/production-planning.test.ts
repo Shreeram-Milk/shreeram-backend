@@ -118,7 +118,7 @@ describe('rider sheet', () => {
     buildRiderSheet({ date: '2026-10-15', slot: morning, stops, closing: { slotId: morning.slotId, closesAt: '2026-10-14T15:30:00.000Z' }, truncated: false, warnings: [], now: new Date(now) })
 
   it('puts each PIN code together, lowest first, so a rider never goes back to an area', () => {
-    const result = sheet([stop({ orderId: 'a', pinCode: '380054' }), stop({ orderId: 'b', pinCode: '380015' }), stop({ orderId: 'c', pinCode: '380054' }), stop({ orderId: 'd', pinCode: '380015' })])
+    const result = sheet([stop({ orderId: 'a', pinCode: '380054' }), stop({ orderId: 'b', pinCode: '380015' }), stop({ orderId: 'c', pinCode: '380054', addressLine1: 'B-3' }), stop({ orderId: 'd', pinCode: '380015', addressLine1: 'B-3' })])
     expect(result.areas.map(area => [area.pinCode, area.stops.map(item => item.orderId)])).toEqual([['380015', ['b', 'd']], ['380054', ['a', 'c']]])
     expect(result.stopCount).toBe(4)
   })
@@ -137,11 +137,26 @@ describe('rider sheet', () => {
     const litre = { productId: 'cow', variantId: 'litre', productName: 'Cow Milk', variantName: '1 L', quantity: 1 }
     const result = sheet([
       stop({ orderId: 'a', items: [{ ...litre }, { ...buffalo }] }),
-      stop({ orderId: 'b' }),
+      stop({ orderId: 'b', recipientName: 'Shah' }),
       stop({ orderId: 'c', pinCode: '380054', items: [{ ...buffalo, quantity: 3 }] }),
     ])
     expect(result.areas[0]?.load.map(line => [line.productName, line.variantName, line.quantity])).toEqual([['Buffalo Milk', '500 ml', 2], ['Cow Milk', '1 L', 1], ['Cow Milk', '500 ml', 1]])
     expect(result.load.map(line => [line.productName, line.variantName, line.quantity])).toEqual([['Buffalo Milk', '500 ml', 5], ['Cow Milk', '1 L', 1], ['Cow Milk', '500 ml', 1]])
+  })
+
+  it('makes one stop of several orders for the same house, adding up the same product, and keeps another address separate', () => {
+    const ghee = { productId: 'ghee', variantId: 'jar', productName: 'Ghee', variantName: '500 ml', quantity: 1 }
+    const result = sheet([
+      stop({ orderId: 'first', kind: 'one_time', items: [{ productId: 'cow', variantId: 'half', productName: 'Cow Milk', variantName: '500 ml', quantity: 5 }] }),
+      stop({ orderId: 'second', recipientName: ' patel ', kind: 'trial', items: [{ productId: 'cow', variantId: 'half', productName: 'Cow Milk', variantName: '500 ml', quantity: 1 }, { ...ghee }] }),
+      stop({ orderId: 'elsewhere', addressLine1: 'C-7' }),
+    ])
+    const stops = result.areas[0]?.stops ?? []
+    expect(stops.map(item => item.orderId)).toEqual(['first', 'elsewhere'])
+    expect(stops[0]?.items.map(item => [item.productName, item.quantity])).toEqual([['Cow Milk', 6], ['Ghee', 1]])
+    expect(stops[0]?.kind).toBe('trial')
+    expect(result.stopCount).toBe(2)
+    expect(result.load.map(line => [line.productName, line.quantity])).toEqual([['Cow Milk', 7], ['Ghee', 1]])
   })
 
   it('is open until the window closes and final from then on, like production planning', () => {
