@@ -59,8 +59,8 @@ export function createDashboardRepository(database: Database): DashboardReposito
         one("select count(*)::int as count from support_tickets where status in ('open', 'in_progress')"),
         // Sales per India day for the last 14 days, by when the order was placed.
         database.query<Row>(
-          `select (created_at at time zone 'Asia/Kolkata')::date::text as day, count(*)::int as orders, coalesce(sum(total_paise), 0)::bigint as paise
-           from orders where status <> 'cancelled' and (created_at at time zone 'Asia/Kolkata')::date > $1::date - 14
+          `select (placed_at at time zone 'Asia/Kolkata')::date::text as day, count(*)::int as orders, coalesce(sum(total_paise), 0)::bigint as paise
+           from orders where status <> 'cancelled' and (placed_at at time zone 'Asia/Kolkata')::date > $1::date - 14
            group by 1`,
           [today],
         ),
@@ -77,11 +77,11 @@ export function createDashboardRepository(database: Database): DashboardReposito
         database.query<Row>(
           `select i.product_name as name, sum(i.quantity)::int as quantity, coalesce(sum(i.line_total_paise), 0)::bigint as paise
            from order_items i join orders o on o.id = i.order_id
-           where o.status <> 'cancelled' and (o.created_at at time zone 'Asia/Kolkata')::date > $1::date - 7
+           where o.status <> 'cancelled' and (o.placed_at at time zone 'Asia/Kolkata')::date > $1::date - 7
            group by i.product_name order by paise desc, quantity desc limit 5`,
           [today],
         ),
-        database.query<Row>('select id, order_number, recipient_name, total_paise, status, created_at from orders order by created_at desc limit 6'),
+        database.query<Row>('select id, order_number, recipient_name, total_paise, status, placed_at from orders order by placed_at desc limit 6'),
       ])
       const counts: OrderCounts = { placed: 0, out_for_delivery: 0, delivered: 0, missed: 0, cancelled: 0 }
       for (const row of byStatus.rows) if (String(row.status) in counts) counts[String(row.status) as keyof OrderCounts] = num(row.count)
@@ -107,7 +107,7 @@ export function createDashboardRepository(database: Database): DashboardReposito
         deliveryQuality: { delivered7: num(quality.delivered), missed7: num(quality.missed) },
         windows: windows.rows.map((row): WindowProgress => ({ slotId: String(row.id), name: String(row.name), startTime: String(row.start_time), endTime: String(row.end_time), total: num(row.total), delivered: num(row.delivered), outForDelivery: num(row.out_for_delivery), missed: num(row.missed) })),
         topProducts: topProducts.rows.map((row): TopProduct => ({ name: String(row.name), quantity: num(row.quantity), revenuePaise: num(row.paise) })),
-        recentOrders: recent.rows.map((row): RecentOrder => ({ id: String(row.id), orderNumber: String(row.order_number), customerName: String(row.recipient_name ?? ''), totalPaise: num(row.total_paise), status: String(row.status), placedAt: new Date(String(row.created_at)).toISOString() })),
+        recentOrders: recent.rows.map((row): RecentOrder => ({ id: String(row.id), orderNumber: String(row.order_number), customerName: String(row.recipient_name ?? ''), totalPaise: num(row.total_paise), status: String(row.status), placedAt: new Date(String(row.placed_at)).toISOString() })),
         attention: { creditLimitSkips: num(skips.count), overdueOrders: num(overdue.count), openTickets: num(tickets.count) },
       }
     },
