@@ -36,6 +36,23 @@ describe('pricing and placing an order', () => {
     expect(mismatched.body.quote.problems.map((problem: { code: string }) => problem.code)).toEqual(['SLOT_NOT_AVAILABLE'])
   })
 
+  it('lets the customer change the delivery window on the review screen after picking another one on the product page', async () => {
+    const api = await createTestApi()
+    const s = await shop(api)
+    const { token, addressId } = await customerSignUp(api, '9824612345')
+    const served = api.deliveryAnswers.get(s.milk.id)
+    if (!served?.served) throw new Error('shop should serve milk')
+    const evening = { slotId: 'a6f1c2d3-0000-4000-8000-0000000000e1', name: 'Evening', startTime: '17:00', endTime: '19:00', earliestDate: '2026-10-10', orderBy: '2026-10-10T05:30:00.000Z', cancelBy: '2026-10-10T05:30:00.000Z' }
+    api.deliveryAnswers.set(s.milk.id, { ...served, slots: [...served.slots, evening] })
+    const lines = [{ variantId: s.milkVariant, quantity: 2, slotId: s.slot }]
+    const fromProductPage = await quote(api, token, { addressId, lines })
+    expect(fromProductPage.body.quote.orders[0].selectedSlotId).toBe(s.slot)
+    // The review screen sends its choice under the key of the order it was shown in (which includes the window from the product page).
+    const changed = await quote(api, token, { addressId, lines, slots: { [fromProductPage.body.quote.orders[0].key]: evening.slotId } })
+    expect(changed.body.quote.orders[0].selectedSlotId).toBe(evening.slotId)
+    expect(changed.body.quote.problems).toEqual([])
+  })
+
   it('places an order the server priced itself, with the delivery date, window and address, only after its payment is confirmed', async () => {
     const api = await createTestApi()
     const s = await shop(api)

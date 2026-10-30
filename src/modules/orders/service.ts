@@ -144,7 +144,7 @@ export function createOrderService({ repository, addresses, delivery, audit, pay
       const slots = group.deliveryMethod === 'local_delivery' && answer?.served ? answer.slots : []
       // The customer's choice must be one of the offered windows. With no choice made and only one window offered, that one is used.
       // An explicit choice on the review screen wins; otherwise the window picked on the product page, if it is still offered.
-      const wanted = group.lines[0]?.slotId ?? input.slots[group.key]
+      const wanted = input.slots[group.key] ?? group.lines[0]?.slotId
       const picked = wanted ? (slots.find(slot => slot.slotId === wanted) ?? null) : (slots.length === 1 ? (slots[0] ?? null) : null)
       chosen.set(group.key, picked)
       if (group.deliveryMethod === 'local_delivery' && !picked) {
