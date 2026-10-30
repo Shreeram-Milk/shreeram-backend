@@ -19,6 +19,19 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      # The server is small: compiling there (while the admin panel builds on the same machine) got the build killed for lack of
+      # memory. The code is compiled here instead, and only the finished dist/ folder is sent.
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Build backend
+        run: |
+          npm ci
+          npm run build
+
       - name: Configure SSH
         env:
           SSH_PRIVATE_KEY: ${{ secrets.EC2_SSH_KEY }}
@@ -29,23 +42,27 @@ jobs:
           chmod 600 ~/.ssh/deploy_key
           ssh-keyscan -H "${{ secrets.EC2_HOST }}" >> ~/.ssh/known_hosts
 
-      - name: Upload backend source
+      - name: Upload backend source and build
         run: |
           rsync -az \
             --exclude='.env' \
             --exclude='node_modules/' \
+            --exclude='dist/' \
             --exclude='.git/' \
             -e "ssh -i ~/.ssh/deploy_key" \
             ./ "${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }}:/var/www/html/shreeram-backend/"
+          # dist/ is replaced as a whole, so a file removed from the code is removed from the server too.
+          rsync -az --delete \
+            -e "ssh -i ~/.ssh/deploy_key" \
+            dist/ "${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }}:/var/www/html/shreeram-backend/dist/"
 
-      - name: Build and restart backend
+      - name: Install packages and restart backend
         run: |
           ssh -i ~/.ssh/deploy_key \
             "${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }}" \
             'set -e
              cd /var/www/html/shreeram-backend
              npm ci
-             npm run build
              sudo systemctl restart shreeram-backend
              sleep 3
              sudo systemctl is-active --quiet shreeram-backend
