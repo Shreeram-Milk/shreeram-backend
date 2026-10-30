@@ -17,6 +17,8 @@ describe('the dashboard', () => {
     expect(response.body).toMatchObject({
       today: '2026-10-11', tomorrow: '2026-10-12', deliveries: { todayTotal: 6, tomorrowTotal: 9 }, plans: { subscriptions: 4, trials: 2 },
       money: { owedPaise: 125_000, refundsToSend: 1 }, attention: { creditLimitSkips: 1, openTickets: 2 },
+      sales: { todayPaise: 48_000, yesterdayPaise: 40_000, last7Orders: 40 }, deliveryQuality: { delivered7: 38, missed7: 2 }, customers: { newThisWeek: 5, newPreviousWeek: 3 },
+      windows: [{ name: 'Morning', total: 4 }], topProducts: [{ name: 'Cow Milk' }], recentOrders: [{ orderNumber: 'SRM-1' }],
     })
   })
 })

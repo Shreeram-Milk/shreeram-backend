@@ -1261,7 +1261,12 @@ export async function createTestApi(options: { clock?: ReturnType<typeof createC
         deliveries: { today: { placed: 3, out_for_delivery: 1, delivered: 2, missed: 0, cancelled: 1 }, todayTotal: 6, tomorrowTotal: 9 },
         plans: { subscriptions: 4, trials: 2 },
         money: { owedPaise: 125_000, owingCustomers: 3, refundsToSend: 1, refundsToSendPaise: 7000, paidOnlineTodayPaise: 21_000 },
-        customers: { active: 40, newThisWeek: 5 },
+        customers: { active: 40, newThisWeek: 5, newPreviousWeek: 3 },
+        sales: { todayPaise: 48_000, yesterdayPaise: 40_000, todayOrders: 6, yesterdayOrders: 5, last7Paise: 300_000, previous7Paise: 250_000, last7Orders: 40, previous7Orders: 35, trend: [{ date: '2026-10-11', orders: 6, revenuePaise: 48_000 }] },
+        deliveryQuality: { delivered7: 38, missed7: 2 },
+        windows: [{ slotId: 'slot-1', name: 'Morning', startTime: '06:00', endTime: '08:00', total: 4, delivered: 2, outForDelivery: 1, missed: 0 }],
+        topProducts: [{ name: 'Cow Milk', quantity: 30, revenuePaise: 150_000 }],
+        recentOrders: [{ id: 'order-1', orderNumber: 'SRM-1', customerName: 'Patel', totalPaise: 8_000, status: 'placed', placedAt: '2026-10-11T02:00:00.000Z' }],
         attention: { creditLimitSkips: 1, overdueOrders: 0, openTickets: 2 },
       }
     },
