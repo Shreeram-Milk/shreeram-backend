@@ -51,8 +51,8 @@ export function createFcmSender(settings: FcmSettings, { client, retryDelayMs = 
         tokens: batch,
         notification: { title: message.title, body: message.body },
         data: (message.link ? { link: message.link } : {}) as Record<string, string>,
-        // Offers are not urgent: normal priority, so they never wake a sleeping phone the way a delivery message may.
-        android: { priority: (message.channel === 'deliveries' ? 'high' : 'normal') as 'high' | 'normal', notification: { channelId: message.channel } },
+        // Request prompt delivery for every visible notification, including staff broadcasts.
+        android: { priority: 'high' as const, notification: { channelId: message.channel } },
       })
       /** Sends one batch and returns the phones that failed for a temporary reason (all of them when the whole request failed). */
       const attempt = async (batch: string[]): Promise<string[] | 'failed'> => {

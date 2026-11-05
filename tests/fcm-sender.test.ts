@@ -71,11 +71,11 @@ describe('sending to phones through Firebase', () => {
     expect(calls).toHaveLength(1)
   })
 
-  it('sends delivery messages with high priority and offers with normal priority, on their own channel', async () => {
+  it('sends delivery messages and broadcasts with high priority, on their own channel', async () => {
     const seen: Array<{ priority: string; channelId: string }> = []
     const client: MulticastClient = { async sendEachForMulticast(m) { seen.push({ priority: m.android.priority, channelId: m.android.notification.channelId }); return { responses: m.tokens.map(() => ok) } } }
     await sender(client).send(phones(1), { ...message, channel: 'deliveries' })
     await sender(client).send(phones(1), message)
-    expect(seen).toEqual([{ priority: 'high', channelId: 'deliveries' }, { priority: 'normal', channelId: 'offers' }])
+    expect(seen).toEqual([{ priority: 'high', channelId: 'deliveries' }, { priority: 'high', channelId: 'offers' }])
   })
 })
