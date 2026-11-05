@@ -379,6 +379,22 @@ describe('cancelling and the status steps', () => {
     expect((await adminSend(api, s.cookie, 'post', '/admin/orders/bulk-status', { orderIds: [first.id], status: 'cancelled' })).status).toBe(400)
   })
 
+  it('lets the rider mark a placed order delivered by passing through out for delivery, while the admin step rule stays', async () => {
+    const api = await createTestApi()
+    const s = await shop(api)
+    const { token, addressId } = await customerSignUp(api, '9824612345')
+    const placed = (await place(api, token, milkOrder(s, addressId, 'key-rider-1'))).body.orders[0]
+    const already = (await place(api, token, milkOrder(s, addressId, 'key-rider-2'))).body.orders[0]
+    await adminSend(api, s.cookie, 'post', `/admin/orders/${already.id}/status`, { status: 'out_for_delivery', note: '' })
+    const actor = { adminId: 'admin-1', ip: null }
+    // The admin panel still refuses placed -> delivered in one step.
+    expect(await api.orderService.adminBulkStatus({ orderIds: [placed.id], status: 'delivered', note: '' }, actor)).toEqual({ updated: 0, failed: [{ orderId: placed.id, code: 'INVALID_STATUS_STEP' }] })
+    const rider = await api.orderService.adminBulkStatus({ orderIds: [placed.id, already.id], status: 'delivered', note: 'Rider app' }, actor, { handedOver: true })
+    expect(rider).toEqual({ updated: 2, failed: [] })
+    expect(api.orders.orders.find(item => item.id === placed.id)?.status).toBe('delivered')
+    expect(api.orders.orders.find(item => item.id === already.id)?.status).toBe('delivered')
+  })
+
   it('keeps a courier and tracking link only on courier orders, and only real web links', async () => {
     const api = await createTestApi()
     const s = await shop(api)

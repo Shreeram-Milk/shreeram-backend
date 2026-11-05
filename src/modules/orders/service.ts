@@ -359,11 +359,24 @@ export function createOrderService({ repository, addresses, delivery, audit, pay
      * One status step for many orders. Each order is changed on its own (an order that cannot take the step is reported and
      * skipped, never half-changed), so one odd order does not stop the rest.
      */
-    async adminBulkStatus(input: BulkStatus, actor: { adminId: string; ip: string | null }): Promise<{ updated: number; failed: Array<{ orderId: string; code: string }> }> {
+    async adminBulkStatus(
+      input: BulkStatus,
+      actor: { adminId: string; ip: string | null },
+      options: { handedOver?: boolean } = {},
+    ): Promise<{ updated: number; failed: Array<{ orderId: string; code: string }> }> {
       const failed: Array<{ orderId: string; code: string }> = []
       let updated = 0
       for (const orderId of [...new Set(input.orderIds)]) {
         try {
+          // The rider hands the order over at the door, so it was out for delivery even if nobody marked it so. That step is
+          // recorded in the history but not announced: the customer was already told the rider is near, and is about to hear "delivered".
+          if (options.handedOver && input.status === 'delivered') {
+            try {
+              await repository.changeStatus(orderId, 'out_for_delivery', { actor: { adminId: actor.adminId }, note: input.note, reason: '' }, now())
+            } catch (error) {
+              if (!(error instanceof AppError) || error.code !== 'INVALID_STATUS_STEP') throw error
+            }
+          }
           const changed = await repository.changeStatus(orderId, input.status, { actor: { adminId: actor.adminId }, note: input.note, reason: '' }, now())
           if (changed) { updated += 1; await announce(orderId, input.status) }
           else failed.push({ orderId, code: 'ORDER_NOT_FOUND' })

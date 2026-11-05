@@ -94,7 +94,7 @@ export function createRiderService({ repository, auth, plans, orders, notifier, 
     },
 
     /** Closes one house's orders (a house can have several) as delivered or missed, with the same rules and customer messages as the admin panel. */
-    markOrders: (input: RiderDeliveriesBody, actor: Actor) => orders.adminBulkStatus({ orderIds: input.orderIds, status: input.status, note: 'Rider app' }, actor),
+    markOrders: (input: RiderDeliveriesBody, actor: Actor) => orders.adminBulkStatus({ orderIds: input.orderIds, status: input.status, note: 'Rider app' }, actor, { handedOver: true }),
   }
 }
 
