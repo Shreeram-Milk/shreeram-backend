@@ -99,6 +99,9 @@ import { createOnboardingService } from './modules/onboarding/service.js'
 import { createMediaRepository } from './modules/media/repository.js'
 import { createAdminMediaRouter } from './modules/media/routes.js'
 import { createMediaService } from './modules/media/service.js'
+import { createRiderRepository } from './modules/rider/repository.js'
+import { createRiderRouter } from './modules/rider/routes.js'
+import { createRiderService } from './modules/rider/service.js'
 
 type Dependencies = { env: Pick<Env, 'NODE_ENV' | 'CORS_ORIGINS' | 'AUTH_SECRET' | 'MAIL_MODE' | 'SMTP_HOST' | 'SMTP_PORT' | 'SMTP_USER' | 'SMTP_PASS' | 'MAIL_FROM' | 'AWS_REGION' | 'S3_MEDIA_BUCKET' | 'PHONEPE_ENV' | 'PHONEPE_CLIENT_ID' | 'PHONEPE_CLIENT_SECRET' | 'PHONEPE_CLIENT_VERSION' | 'PHONEPE_MERCHANT_ID' | 'PHONEPE_WEBHOOK_USERNAME' | 'PHONEPE_WEBHOOK_PASSWORD' | 'PUSH_MODE' | 'FIREBASE_SERVICE_ACCOUNT_FILE' | 'FIREBASE_SERVICE_ACCOUNT_JSON' | 'REVIEW_ACCOUNT_EMAIL' | 'REVIEW_ACCOUNT_CODE' | 'GOOGLE_WEB_CLIENT_ID'>; database: Database; sender?: CodeSender; customerSender?: CustomerCodeSender; storage?: ObjectStorage; pushSender?: PushSender }
 
@@ -205,10 +208,12 @@ export function createRoutes({ env, database, sender, customerSender, storage, p
   const supportTickets = createSupportTicketService({ repository: createSupportTicketRepository(database), audit })
   const customers = createCustomerService({ repository: createCustomerRepository(database), addresses: createCustomerAddressRepository(database), audit })
   const dashboard = createDashboardService({ repository: createDashboardRepository(database) })
+  const rider = createRiderService({ repository: createRiderRepository(database), auth, plans: productionPlans, orders, notifier })
   const secureCookie = env.NODE_ENV === 'production'
 
   const mount = (app: Express) => {
     app.use('/admin/auth', createAuthRouter({ auth, allowedOrigins: env.CORS_ORIGINS, secureCookie }))
+    app.use('/rider', createRiderRouter({ rider }))
     app.use('/webhooks/phonepe', createPhonePeWebhookRouter({ payments }))
     app.use('/customer/payments', createCustomerPaymentRouter({ auth: customerAuth, payments }))
     app.use('/admin/payments', createAdminPaymentRouter({ auth, payments, allowedOrigins: env.CORS_ORIGINS }))

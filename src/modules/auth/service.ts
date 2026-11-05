@@ -31,7 +31,28 @@ export function createAuthService({ repository, sender, audit, secret, now = () 
   const invalidCredentials = () => new AppError(401, 'INVALID_CREDENTIALS', 'The email or password is not correct.')
   const invalidCode = () => new AppError(401, 'INVALID_CODE', 'The code is not correct or has expired.')
 
+  /**
+   * Step 2 on its own: checks the emailed code and spends it. Used by the web sign-in below and by the rider app, which opens its own
+   * kind of session afterwards. Wrong answers look the same, so it cannot be used to find out which emails belong to an admin.
+   */
+  async function confirmCode(email: string, code: string, context: RequestContext): Promise<SignedInAdmin> {
+    const admin = await repository.findAdminByEmail(email)
+    const stored = admin && admin.status === 'active' ? await repository.findActiveLoginCode(admin.id, now()) : null
+    if (!admin || !stored || stored.attempts >= CODE_MAX_ATTEMPTS) throw invalidCode()
+    if (!safeEqual(hashCode(secret, admin.id, code), stored.codeHash)) {
+      await repository.bumpCodeAttempts(stored.id)
+      await audit({ adminId: admin.id, action: 'login_code_wrong', ip: context.ip })
+      throw invalidCode()
+    }
+    // Spending the code is atomic: if two requests race with the same correct code, only one gets a session.
+    if (!(await repository.consumeLoginCode(stored.id, now()))) throw invalidCode()
+    await repository.recordSuccessfulLogin(admin.id, now())
+    return { id: admin.id, email: admin.email }
+  }
+
   return {
+    confirmCode,
+
     /** Step 1: check the password, then send a code. Returns nothing; the code arrives out of band. */
     async startLogin(email: string, password: string, context: RequestContext): Promise<void> {
       const admin = await repository.findAdminByEmail(email)
@@ -64,17 +85,7 @@ export function createAuthService({ repository, sender, audit, secret, now = () 
 
     /** Step 2: check the code and open a session. The returned token goes in a cookie; only its hash is stored. */
     async completeLogin(email: string, code: string, context: RequestContext): Promise<{ token: string; expiresAt: Date; admin: SignedInAdmin }> {
-      const admin = await repository.findAdminByEmail(email)
-      const stored = admin && admin.status === 'active' ? await repository.findActiveLoginCode(admin.id, now()) : null
-      if (!admin || !stored || stored.attempts >= CODE_MAX_ATTEMPTS) throw invalidCode()
-      if (!safeEqual(hashCode(secret, admin.id, code), stored.codeHash)) {
-        await repository.bumpCodeAttempts(stored.id)
-        await audit({ adminId: admin.id, action: 'login_code_wrong', ip: context.ip })
-        throw invalidCode()
-      }
-      // Spending the code is atomic: if two requests race with the same correct code, only one gets a session.
-      if (!(await repository.consumeLoginCode(stored.id, now()))) throw invalidCode()
-      await repository.recordSuccessfulLogin(admin.id, now())
+      const admin = await confirmCode(email, code, context)
       const token = newToken()
       const expiresAt = new Date(now().getTime() + days(SESSION_DAYS))
       await repository.createSession({ adminId: admin.id, tokenHash: sha256(token), expiresAt, userAgent: context.userAgent?.slice(0, 300) ?? null, ip: context.ip })
