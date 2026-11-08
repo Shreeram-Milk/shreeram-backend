@@ -5,6 +5,11 @@ export type NewRiderSession = { adminId: string; tokenHash: string; expiresAt: D
 /** One delivery window of a day, with how its orders stand. Only local deliveries are counted: the rider does not carry courier parcels. */
 export type RiderWindow = { slotId: string; name: string; startTime: string; endTime: string; open: number; delivered: number; missed: number; pins: number }
 export type CheckIn = { pinCode: string; checkedInAt: string; customersNotified: number }
+/** A house already finished in this window (delivered or missed): it stays on the rider's list with its status. */
+export type ClosedStop = {
+  orderId: string; orderNumber: string; recipientName: string; addressLine1: string; addressLine2: string; pinCode: string
+  status: 'delivered' | 'missed'; closedAt: string; items: Array<{ productName: string; variantName: string; quantity: number }>
+}
 /** A customer with an open order in one PIN code, with the order the message will name. */
 export type WaitingCustomer = { customerId: string; orderId: string; orderNumber: string }
 
@@ -20,7 +25,12 @@ export interface RiderRepository {
   recordCheckIn(input: { adminId: string; date: string; slotId: string; pinCode: string }): Promise<string | null>
   setNotified(checkInId: string, customers: number): Promise<void>
   waitingCustomers(date: string, slotId: string, pinCode: string): Promise<WaitingCustomer[]>
+  /** Delivered and missed local deliveries of one window, latest first. */
+  closedStops(date: string, slotId: string): Promise<ClosedStop[]>
 }
+
+/** The most finished houses one window lists. */
+const CLOSED_LIMIT = 1000
 
 type Row = Record<string, unknown>
 const OPEN = "('placed', 'out_for_delivery')"
@@ -86,6 +96,24 @@ export function createRiderRepository(database: Database): RiderRepository {
         [date, slotId, pinCode],
       )
       return rows.map(row => ({ customerId: String(row.customer_id), orderId: String(row.order_id), orderNumber: String(row.order_number) }))
+    },
+    async closedStops(date, slotId) {
+      const { rows } = await database.query<Row>(
+        `select o.id, o.order_number, o.recipient_name, o.address_line1, o.address_line2, o.pin_code, o.status, o.updated_at,
+                json_agg(json_build_object('productName', i.product_name, 'variantName', i.variant_name, 'quantity', i.quantity) order by i.product_name, i.variant_name) as items
+           from orders o join order_items i on i.order_id = o.id
+          where o.delivery_date = $1::date and o.delivery_slot_id = $2 and o.delivery_method = 'local_delivery' and o.status in ('delivered', 'missed')
+          group by o.id
+          order by o.updated_at desc
+          limit $3`,
+        [date, slotId, CLOSED_LIMIT],
+      )
+      return rows.map(row => ({
+        orderId: String(row.id), orderNumber: String(row.order_number), recipientName: String(row.recipient_name ?? ''), addressLine1: String(row.address_line1 ?? ''),
+        addressLine2: String(row.address_line2 ?? ''), pinCode: String(row.pin_code ?? ''), status: row.status as ClosedStop['status'],
+        closedAt: row.updated_at instanceof Date ? row.updated_at.toISOString() : String(row.updated_at),
+        items: (row.items as Array<Record<string, unknown>>).map(item => ({ productName: String(item.productName), variantName: String(item.variantName), quantity: Number(item.quantity) })),
+      }))
     },
   }
 }

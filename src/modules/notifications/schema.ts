@@ -50,7 +50,8 @@ export type Audience = z.infer<typeof audienceSchema>
 export const audiencePreviewSchema = z.object({ audience: audienceSchema })
 
 /** `opensOffers`: tapping the message opens the Offers page instead of the message list. */
-export const broadcastSchema = z.object({ title, titleGujarati, body, bodyGujarati, audience: audienceSchema, opensOffers: z.boolean().default(false) })
+/** Tapping the message opens one offer's page (offerId), the Offers list (opensOffers), or the notifications list. */
+export const broadcastSchema = z.object({ title, titleGujarati, body, bodyGujarati, audience: audienceSchema, opensOffers: z.boolean().default(false), offerId: z.uuid('That is not a valid offer id.').nullable().default(null) })
 export type BroadcastInput = z.infer<typeof broadcastSchema>
 
 export const broadcastListQuerySchema = z.object({ page, pageSize: pageSize(20) })

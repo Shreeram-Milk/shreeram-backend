@@ -370,7 +370,8 @@ export function createFakeStorage(): ObjectStorage & { objects: Map<string, Stor
 export const DEFAULT_SETTINGS: StoredAppSettings = {
   supportPhone: '', supportEmail: '', supportWhatsApp: '', callEnabled: false, chatEnabled: false, whatsappEnabled: false,
   supportHoursEn: 'Daily, 5:00 AM – 8:00 PM', supportHoursGu: '', afterHoursMessageEn: '', afterHoursMessageGu: '',
-  deliveryPromiseEn: 'Delivered before 7:00 AM', deliveryPromiseGu: '', minimumAppVersion: '1.0.0',
+  deliveryPromiseEn: 'Delivered before 7:00 AM', deliveryPromiseGu: '', minimumAppVersion: '1.0.0', latestAppVersion: '1.0.0',
+  rewardsEnabled: false, rewardsMinOrderPaise: 0, rewardsExpiryDays: 30,
   maintenanceMode: false, maintenanceMessageEn: '', maintenanceMessageGu: '', showMaintenanceContact: false,
   flags: { showTrials: true, showSubscriptions: true, showOffers: true, showQualityReports: true, showSeasonalBanner: true },
   updatedAt: '2026-01-01T00:00:00.000Z',

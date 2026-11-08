@@ -12,6 +12,7 @@ export const OFFER_PROBLEMS = {
   OFFER_NOT_FOR_THIS: 'That offer does not apply to what is in your cart.',
   OFFER_LIMIT_REACHED: 'That offer has been used up.',
   OFFER_ALREADY_USED: 'You have already used that offer the most times allowed.',
+  OFFER_REWARD_ONLY: 'That code comes from a scratch card. Scratch your own card to use it.',
 } as const
 export type OfferProblemCode = keyof typeof OFFER_PROBLEMS
 

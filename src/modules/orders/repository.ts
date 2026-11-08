@@ -182,7 +182,7 @@ export async function insertOrders(client: PoolClient, customerId: string, order
 
   // The offer is checked again under a lock on its row: two checkouts at once cannot both take the last use.
   const offerRef = orders.find(order => order.offer)?.offer
-  if (offerRef) await lockOffer(client, customerId, offerRef)
+  const reward = offerRef ? await lockOffer(client, customerId, offerRef) : { rewardCardId: null }
 
   const placed: string[] = []
   for (const order of orders) {
@@ -212,7 +212,8 @@ export async function insertOrders(client: PoolClient, customerId: string, order
       })))],
     )
     if (order.offer) {
-      await client.query('insert into offer_redemptions (offer_id, customer_id, checkout_key, order_id, discount_paise) values ($1, $2, $3, $4, $5)', [order.offer.id, customerId, order.offer.checkoutKey, orderId, order.discountPaise ?? 0])
+      await client.query('insert into offer_redemptions (offer_id, customer_id, checkout_key, order_id, discount_paise) values ($1, $2, $3, $4, $5)', [order.offer.id, customerId, order.offer.checkoutKey, orderId, order.discountPaise ?? 0])  // A scratch-card code spends its card on the first order of the checkout.
+      if (reward.rewardCardId) await client.query('update reward_cards set used_at = now(), used_order_id = $2 where id = $1 and used_at is null', [reward.rewardCardId, orderId])
     }
     if (order.subscription) await client.query('update orders set subscription_id = $2, subscription_line_id = $3 where id = $1', [orderId, order.subscription.id, order.subscription.lineId])
     await client.query("insert into order_status_history (order_id, from_status, to_status, changed_by_customer) values ($1, null, 'placed', true)", [orderId])

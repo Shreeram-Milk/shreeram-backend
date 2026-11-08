@@ -47,6 +47,16 @@ export const offerInputSchema = z.object({
   totalLimit: positiveOrNull('The limit'),
   perCustomerLimit: positiveOrNull('The limit'),
   status: z.enum(OFFER_STATUSES).default('active'),
+  /** The picture at the top of the offer page (a finished upload); null means no picture. */
+  imageAssetId: z.uuid('That is not a valid picture id.').nullable().default(null),
+  /** Off: the picture shows alone, for pictures that already carry their own words. */
+  showText: z.boolean().default(true),
+  /** The bullet points under the code, in both languages. */
+  points: z.array(z.object({ en: text(120).min(1, 'Write the point in English.'), gu: text(120).default('') })).max(8, 'Use at most 8 points.').default([]),
+  /** This offer can come out of a scratch card. */
+  inRewardPool: z.boolean().default(false),
+  /** The code works only for a customer who scratched a card for it, so it cannot be passed around. */
+  rewardOnly: z.boolean().default(false),
 }).superRefine((value, context) => {
   const problem = (path: string, message: string) => context.addIssue({ code: 'custom', path: [path], message })
   if (value.kind === 'percent') {
@@ -69,6 +79,12 @@ export const offerInputSchema = z.object({
   if (!value.appliesOneTime && !value.appliesTrial && !value.appliesSubscription) problem('appliesOneTime', 'Choose where this offer works.')
   if (value.minPlanDays !== null && !value.appliesSubscription) problem('minPlanDays', 'A plan length only applies to subscriptions.')
   if (value.startsOn && value.endsOn && value.endsOn < value.startsOn) problem('endsOn', 'The end date must be on or after the start date.')
+  if (value.rewardOnly) {
+    if (!value.inRewardPool) problem('rewardOnly', 'Add the offer to the scratch cards first.')
+    if (value.code === null) problem('code', 'A scratch-card offer needs a code to reveal.')
+    if (value.appliesTrial || value.appliesSubscription) problem('rewardOnly', 'Scratch-card codes work on normal orders only. Untick trials and subscriptions.')
+  }
+  if (value.inRewardPool && value.kind === 'free_gift') problem('inRewardPool', 'Scratch cards give money-off offers only.')
 })
 export type OfferInput = z.infer<typeof offerInputSchema>
 

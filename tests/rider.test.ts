@@ -42,6 +42,7 @@ function setup(options: { stops?: RiderStopRow[]; waiting?: WaitingCustomer[] } 
     },
     async setNotified(id, customers) { const entry = checkIns.find(item => item.id === id); if (entry) entry.customersNotified = customers },
     async waitingCustomers() { return waiting },
+    async closedStops() { return [{ orderId: '9', orderNumber: 'SRM-9', recipientName: 'Dev', addressLine1: 'D-4', addressLine2: '', pinCode: '380001', status: 'delivered' as const, closedAt: NOW.toISOString(), items: [] }] },
   }
   const service = createRiderService({
     repository,
@@ -119,5 +120,11 @@ describe('rider sheet and deliveries', () => {
     expect(house?.orderIds.sort()).toEqual(['1', '2'])
     await service.markOrders({ orderIds: house?.orderIds ?? [], status: 'delivered' }, actor)
     expect(marked).toEqual([{ orderIds: ['1', '2'], status: 'delivered' }])
+  })
+
+  it('keeps finished houses on the sheet with how each one ended', async () => {
+    const { service } = setup()
+    const { done } = await service.sheet(SLOT)
+    expect(done).toEqual([expect.objectContaining({ orderNumber: 'SRM-9', status: 'delivered', pinCode: '380001' })])
   })
 })

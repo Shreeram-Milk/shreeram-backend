@@ -34,6 +34,9 @@ import { createAdminCreditRouter, createCustomerCreditRouter } from './modules/c
 import { createCreditService } from './modules/credit/service.js'
 import { createOfferRepository } from './modules/offers/repository.js'
 import { createAdminOfferRouter, createPublicOfferRouter } from './modules/offers/routes.js'
+import { createRewardRepository } from './modules/rewards/repository.js'
+import { createAdminRewardRouter, createCustomerRewardRouter } from './modules/rewards/routes.js'
+import { createRewardService } from './modules/rewards/service.js'
 import { createOfferService } from './modules/offers/service.js'
 import { createOrderRepository } from './modules/orders/repository.js'
 import { createAdminOrderRouter, createCustomerOrderRouter } from './modules/orders/routes.js'
@@ -196,8 +199,9 @@ export function createRoutes({ env, database, sender, customerSender, storage, p
     onSubscriptionStarted: id => subscriptions.syncNow(id),
     onOrdersPlaced: (customerId, placed) => orders.announcePlaced(customerId, placed),
   })
-  const offers = createOfferService({ repository: createOfferRepository(database), audit })
-  const orders = createOrderService({ repository: orderRepository, addresses: createCustomerAddressRepository(database), delivery, audit, payments, offers, notifier })
+  const offers = createOfferService({ repository: createOfferRepository(database), audit, storage: objectStorage, media })
+  const rewards = createRewardService({ repository: createRewardRepository(database), settings: appSettings, storage: objectStorage, notifier })
+  const orders = createOrderService({ repository: orderRepository, addresses: createCustomerAddressRepository(database), delivery, audit, payments, offers, notifier, onDelivered: orderId => rewards.issueForOrder(orderId) })
   const subscriptions = createSubscriptionService({
     repository: createSubscriptionRepository(database), orders: orderRepository, addresses: createCustomerAddressRepository(database), delivery, payments, offers, audit, logger: paymentLogger, notifier,
   })
@@ -257,6 +261,8 @@ export function createRoutes({ env, database, sender, customerSender, storage, p
     app.use('/admin/banners', createAdminBannerRouter({ auth, banners, allowedOrigins: env.CORS_ORIGINS }))
     app.use('/admin/offers', createAdminOfferRouter({ auth, offers, allowedOrigins: env.CORS_ORIGINS }))
     app.use('/public/offers', createPublicOfferRouter({ offers }))
+    app.use('/admin/rewards', createAdminRewardRouter({ auth, rewards, allowedOrigins: env.CORS_ORIGINS }))
+    app.use('/customer/rewards', createCustomerRewardRouter({ auth: customerAuth, rewards }))
     app.use('/admin/onboarding', createAdminOnboardingRouter({ auth, onboarding, allowedOrigins: env.CORS_ORIGINS }))
     app.use('/public/onboarding', createPublicOnboardingRouter({ onboarding }))
     app.use('/public/banners', createPublicBannerRouter({ banners }))

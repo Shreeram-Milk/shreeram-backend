@@ -109,7 +109,7 @@ export function createNotificationService({ repository, sender, audit, logger = 
       const recipients = await repository.resolveAudience(input.audience)
       if (recipients.length === 0) throw new AppError(409, 'NO_RECIPIENTS', 'No active customers match this group.')
       const wording: Wording = { title: input.title, titleGujarati: input.titleGujarati, body: input.body, bodyGujarati: input.bodyGujarati }
-      const link = input.opensOffers ? '/offers' : '/notifications'
+      const link = input.offerId ? `/offer?offerId=${input.offerId}` : input.opensOffers ? '/offers' : '/notifications'
       const broadcast = await repository.createBroadcast({ ...wording, audience: input.audience }, actor.adminId)
       let stored: string[]
       try {

@@ -4,7 +4,8 @@ import type { Offer } from './rules.js'
 import type { OfferInput } from './schema.js'
 
 /** What the admin sees of an offer: the offer, the gift's name, and when it changed. */
-export type StoredOffer = Offer & { giftLabel: string | null; giftProductId: string | null; createdAt: string; updatedAt: string }
+/** `imageKey` is where the picture sits in storage; it never leaves the backend. */
+export type StoredOffer = Offer & { giftLabel: string | null; giftProductId: string | null; imageKey: string | null; createdAt: string; updatedAt: string }
 
 /** How many checkouts used an offer: in all, and by one customer. */
 export type OfferUsage = { total: number; mine: number }
@@ -23,6 +24,8 @@ export interface OfferRepository {
   usage(offerIds: string[], customerId: string): Promise<Map<string, OfferUsage>>
   /** The price of a gift size (what the offer is worth), or null when that size is not on sale (switched off, or its product or category is). */
   giftPricePaise(variantId: string): Promise<number | null>
+  /** Has this customer scratched a card for this offer that is not used and not expired? */
+  hasUsableRewardCard(offerId: string, customerId: string, now: Date): Promise<boolean>
 }
 
 type Row = Record<string, unknown>
@@ -35,6 +38,7 @@ const COLUMNS = `o.id, o.title, o.title_gu, o.description, o.description_gu, o.k
   to_char(o.starts_on, 'YYYY-MM-DD') as starts_on, to_char(o.ends_on, 'YYYY-MM-DD') as ends_on, o.total_limit, o.per_customer_limit, o.status,
   (select p.name || ' - ' || v.name from product_variants v join products p on p.id = v.product_id where v.id = o.gift_variant_id) as gift_label,
   (select v.product_id from product_variants v where v.id = o.gift_variant_id) as gift_product_id,
+  o.image_asset_id, (select m.object_key from media_assets m where m.id = o.image_asset_id and m.status = 'ready') as image_key, o.show_text, o.points, o.in_reward_pool, o.reward_only,
   o.created_at, o.updated_at`
 
 function toOffer(row: Row): StoredOffer {
@@ -45,14 +49,17 @@ function toOffer(row: Row): StoredOffer {
     appliesOneTime: Boolean(row.applies_one_time), appliesTrial: Boolean(row.applies_trial), appliesSubscription: Boolean(row.applies_subscription), minPlanDays: optionalNumber(row.min_plan_days),
     giftVariantId: row.gift_variant_id ? String(row.gift_variant_id) : null, giftQuantity: Number(row.gift_quantity), code: row.code ? String(row.code) : null,
     startsOn: row.starts_on ? String(row.starts_on) : null, endsOn: row.ends_on ? String(row.ends_on) : null, totalLimit: optionalNumber(row.total_limit), perCustomerLimit: optionalNumber(row.per_customer_limit),
-    status: row.status as StoredOffer['status'], giftLabel: row.gift_label ? String(row.gift_label) : null, giftProductId: row.gift_product_id ? String(row.gift_product_id) : null, createdAt: iso(row.created_at), updatedAt: iso(row.updated_at),
+    status: row.status as StoredOffer['status'], giftLabel: row.gift_label ? String(row.gift_label) : null, giftProductId: row.gift_product_id ? String(row.gift_product_id) : null,
+    imageAssetId: row.image_asset_id ? String(row.image_asset_id) : null, imageKey: row.image_key ? String(row.image_key) : null, showText: Boolean(row.show_text),
+    points: Array.isArray(row.points) ? (row.points as { en: string; gu: string }[]).map(point => ({ en: String(point.en ?? ''), gu: String(point.gu ?? '') })) : [],
+    inRewardPool: Boolean(row.in_reward_pool), rewardOnly: Boolean(row.reward_only), createdAt: iso(row.created_at), updatedAt: iso(row.updated_at),
   }
 }
 
 const values = (input: OfferInput) => [
   input.title, input.titleGu, input.description, input.descriptionGu, input.kind, input.percent, input.flatPaise, input.maxDiscountPaise, input.minOrderPaise, input.scope,
   input.appliesOneTime, input.appliesTrial, input.appliesSubscription, input.minPlanDays, input.giftVariantId, input.giftQuantity, input.code, input.startsOn, input.endsOn,
-  input.totalLimit, input.perCustomerLimit, input.status,
+  input.totalLimit, input.perCustomerLimit, input.status, input.imageAssetId, input.showText, JSON.stringify(input.points), input.inRewardPool, input.rewardOnly,
 ]
 
 export function createOfferRepository(database: Database): OfferRepository {
@@ -81,8 +88,9 @@ export function createOfferRepository(database: Database): OfferRepository {
     create: input => withTransaction(database, async client => {
       const { rows } = await client.query<Row>(
         `insert into offers (title, title_gu, description, description_gu, kind, percent, flat_paise, max_discount_paise, min_order_paise, scope,
-           applies_one_time, applies_trial, applies_subscription, min_plan_days, gift_variant_id, gift_quantity, code, starts_on, ends_on, total_limit, per_customer_limit, status)
-         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22) returning id`,
+           applies_one_time, applies_trial, applies_subscription, min_plan_days, gift_variant_id, gift_quantity, code, starts_on, ends_on, total_limit, per_customer_limit, status,
+           image_asset_id, show_text, points, in_reward_pool, reward_only)
+         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25::jsonb, $26, $27) returning id`,
         values(input),
       )
       const id = String((rows[0] as Row).id)
@@ -94,7 +102,8 @@ export function createOfferRepository(database: Database): OfferRepository {
       const { rows } = await client.query<Row>(
         `update offers set title = $2, title_gu = $3, description = $4, description_gu = $5, kind = $6, percent = $7, flat_paise = $8, max_discount_paise = $9, min_order_paise = $10, scope = $11,
            applies_one_time = $12, applies_trial = $13, applies_subscription = $14, min_plan_days = $15, gift_variant_id = $16, gift_quantity = $17, code = $18, starts_on = $19, ends_on = $20,
-           total_limit = $21, per_customer_limit = $22, status = $23, updated_at = now() where id = $1 returning id`,
+           total_limit = $21, per_customer_limit = $22, status = $23,
+           image_asset_id = $24, show_text = $25, points = $26::jsonb, in_reward_pool = $27, reward_only = $28, updated_at = now() where id = $1 returning id`,
         [id, ...values(input)],
       )
       if (!rows[0]) return null
@@ -125,6 +134,13 @@ export function createOfferRepository(database: Database): OfferRepository {
         [variantId],
       )
       return rows[0] ? Number(rows[0].price_paise) : null
+    },
+    async hasUsableRewardCard(offerId, customerId, now) {
+      const { rows } = await database.query<Row>(
+        'select 1 from reward_cards where offer_id = $1 and customer_id = $2 and scratched_at is not null and used_at is null and expires_at > $3 limit 1',
+        [offerId, customerId, now],
+      )
+      return rows.length > 0
     },
   }
 }

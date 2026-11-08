@@ -96,6 +96,29 @@ describe('offers at checkout', () => {
     expect([refused.status, refused.body.error.code]).toEqual([409, 'OFFER_CODE_INVALID'])
   })
 
+  it('a scratch-card code is hidden from the Offers list and works only for a customer holding a scratched card', async () => {
+    const api = await createTestApi()
+    const s = await shop(api)
+    const { token, addressId, customerId } = await customerSignUp(api, '9824612345')
+    expect((await adminSend(api, s.cookie, 'post', '/admin/offers', { ...percentOffer, code: 'LUCKY', rewardOnly: true })).status).toBe(400)
+    const offer = await offerOf(api, s.cookie, { ...percentOffer, code: 'LUCKY', minOrderPaise: 0, inRewardPool: true, rewardOnly: true, points: [{ en: 'Valid once' }] })
+    expect((await request(api.app).get('/public/offers')).body.offers).toEqual([])
+    expect((await request(api.app).get(`/public/offers/${offer.id}`)).status).toBe(404)
+    const cart = { addressId, lines: [{ variantId: s.milkVariant, quantity: 2 }], slots: { [s.setupKey]: s.slot }, offerCode: 'LUCKY' }
+    expect((await quote(api, token, cart)).body.quote.problems[0].code).toBe('OFFER_REWARD_ONLY')
+    api.offerStore.rewardCards.add(`${offer.id}:${customerId}`)
+    expect((await quote(api, token, cart)).body.quote.offer).toMatchObject({ id: offer.id, code: 'LUCKY' })
+  })
+
+  it('shows one live offer page with its points, and not one that is switched off', async () => {
+    const api = await createTestApi()
+    const s = await shop(api)
+    const offer = await offerOf(api, s.cookie, { ...percentOffer, code: 'PAGE', points: [{ en: 'Above Rs 100', gu: '' }], showText: false })
+    expect((await request(api.app).get(`/public/offers/${offer.id}`)).body.offer).toMatchObject({ code: 'PAGE', showText: false, imageUrl: null, points: [{ en: 'Above Rs 100', gu: '' }] })
+    await adminSend(api, s.cookie, 'patch', `/admin/offers/${offer.id}/status`, { status: 'inactive' })
+    expect((await request(api.app).get(`/public/offers/${offer.id}`)).status).toBe(404)
+  })
+
   it('a code offer never applies by itself, and a code applies only that offer', async () => {
     const api = await createTestApi()
     const s = await shop(api)

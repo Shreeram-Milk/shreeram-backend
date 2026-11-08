@@ -12,7 +12,7 @@ import type { BannerInput, BannerStatus } from './schema.js'
 export type AdminBanner = Omit<Banner, 'imageKey'> & { imageUrl: string | null }
 
 /** The shape the customer app reads. It carries only what the app shows: no status, audience or dates. */
-export type PublicBanner = { id: string; type: Banner['type']; titleEn: string; titleGu: string; messageEn: string; messageGu: string; labelEn: string; labelGu: string; imageUrl: string | null; ctaType: Banner['ctaType']; ctaTarget: string; sortOrder: number }
+export type PublicBanner = { id: string; type: Banner['type']; titleEn: string; titleGu: string; messageEn: string; messageGu: string; labelEn: string; labelGu: string; imageUrl: string | null; showText: boolean; ctaType: Banner['ctaType']; ctaTarget: string; sortOrder: number }
 
 /** Today's date in India (YYYY-MM-DD). The business runs on one timezone, never the server's. */
 export function businessDate(now: Date): string {
@@ -41,7 +41,7 @@ export function createBannerService({ repository, audit, storage, media, now = (
   const toAdminBanner = async (banner: Banner): Promise<AdminBanner> => {
     const imageUrl = await imageUrlOf(banner)
     // Rebuilt field by field so the storage key can never slip into a response.
-    return { id: banner.id, type: banner.type, audience: banner.audience, titleEn: banner.titleEn, titleGu: banner.titleGu, messageEn: banner.messageEn, messageGu: banner.messageGu, labelEn: banner.labelEn, labelGu: banner.labelGu, imageAssetId: banner.imageAssetId, imageUrl, ctaType: banner.ctaType, ctaTarget: banner.ctaTarget, startDate: banner.startDate, endDate: banner.endDate, sortOrder: banner.sortOrder, status: banner.status, createdAt: banner.createdAt, updatedAt: banner.updatedAt }
+    return { id: banner.id, type: banner.type, audience: banner.audience, titleEn: banner.titleEn, titleGu: banner.titleGu, messageEn: banner.messageEn, messageGu: banner.messageGu, labelEn: banner.labelEn, labelGu: banner.labelGu, imageAssetId: banner.imageAssetId, imageUrl, showText: banner.showText, ctaType: banner.ctaType, ctaTarget: banner.ctaTarget, startDate: banner.startDate, endDate: banner.endDate, sortOrder: banner.sortOrder, status: banner.status, createdAt: banner.createdAt, updatedAt: banner.updatedAt }
   }
   const checkImage = async (input: BannerInput) => {
     if (!input.imageAssetId) return
@@ -89,7 +89,7 @@ export function createBannerService({ repository, audit, storage, media, now = (
       const date = businessDate(now())
       return publicList.get(date, async () => {
         const banners = await repository.listPublic(date)
-        return Promise.all(banners.map(async banner => ({ id: banner.id, type: banner.type, titleEn: banner.titleEn, titleGu: banner.titleGu, messageEn: banner.messageEn, messageGu: banner.messageGu, labelEn: banner.labelEn, labelGu: banner.labelGu, imageUrl: await imageUrlOf(banner), ctaType: banner.ctaType, ctaTarget: banner.ctaTarget, sortOrder: banner.sortOrder })))
+        return Promise.all(banners.map(async banner => ({ id: banner.id, type: banner.type, titleEn: banner.titleEn, titleGu: banner.titleGu, messageEn: banner.messageEn, messageGu: banner.messageGu, labelEn: banner.labelEn, labelGu: banner.labelGu, imageUrl: await imageUrlOf(banner), showText: banner.showText, ctaType: banner.ctaType, ctaTarget: banner.ctaTarget, sortOrder: banner.sortOrder })))
       })
     },
   }

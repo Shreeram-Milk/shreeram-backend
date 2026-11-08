@@ -14,7 +14,7 @@ const iso = (value: unknown) => (value instanceof Date ? value.toISOString() : S
 const COLUMNS = `support_phone, support_email, support_whatsapp, call_enabled, chat_enabled, whatsapp_enabled, support_hours_en, support_hours_gu,
   after_hours_message_en, after_hours_message_gu, delivery_promise_en, delivery_promise_gu, minimum_app_version, maintenance_mode,
   maintenance_message_en, maintenance_message_gu, show_maintenance_contact, flag_show_trials, flag_show_subscriptions, flag_show_offers,
-  flag_show_quality_reports, flag_show_seasonal_banner, updated_at`
+  flag_show_quality_reports, flag_show_seasonal_banner, latest_app_version, rewards_enabled, rewards_min_order_paise, rewards_expiry_days, updated_at`
 
 const toSettings = (row: Row): StoredAppSettings => ({
   supportPhone: String(row.support_phone), supportEmail: String(row.support_email), supportWhatsApp: String(row.support_whatsapp),
@@ -22,7 +22,9 @@ const toSettings = (row: Row): StoredAppSettings => ({
   supportHoursEn: String(row.support_hours_en), supportHoursGu: String(row.support_hours_gu),
   afterHoursMessageEn: String(row.after_hours_message_en), afterHoursMessageGu: String(row.after_hours_message_gu),
   deliveryPromiseEn: String(row.delivery_promise_en), deliveryPromiseGu: String(row.delivery_promise_gu),
-  minimumAppVersion: String(row.minimum_app_version), maintenanceMode: Boolean(row.maintenance_mode),
+  minimumAppVersion: String(row.minimum_app_version), latestAppVersion: String(row.latest_app_version),
+  rewardsEnabled: Boolean(row.rewards_enabled), rewardsMinOrderPaise: Number(row.rewards_min_order_paise), rewardsExpiryDays: Number(row.rewards_expiry_days),
+  maintenanceMode: Boolean(row.maintenance_mode),
   maintenanceMessageEn: String(row.maintenance_message_en), maintenanceMessageGu: String(row.maintenance_message_gu),
   showMaintenanceContact: Boolean(row.show_maintenance_contact),
   flags: { showTrials: Boolean(row.flag_show_trials), showSubscriptions: Boolean(row.flag_show_subscriptions), showOffers: Boolean(row.flag_show_offers), showQualityReports: Boolean(row.flag_show_quality_reports), showSeasonalBanner: Boolean(row.flag_show_seasonal_banner) },
@@ -43,11 +45,13 @@ export function createAppSettingsRepository(database: Database): AppSettingsRepo
            support_hours_en = $7, support_hours_gu = $8, after_hours_message_en = $9, after_hours_message_gu = $10, delivery_promise_en = $11, delivery_promise_gu = $12,
            minimum_app_version = $13, maintenance_mode = $14, maintenance_message_en = $15, maintenance_message_gu = $16, show_maintenance_contact = $17,
            flag_show_trials = $18, flag_show_subscriptions = $19, flag_show_offers = $20, flag_show_quality_reports = $21, flag_show_seasonal_banner = $22,
+           latest_app_version = $24, rewards_enabled = $25, rewards_min_order_paise = $26, rewards_expiry_days = $27,
            updated_at = now(), updated_by = $23 where id returning ${COLUMNS}`,
         [input.supportPhone, input.supportEmail, input.supportWhatsApp, input.callEnabled, input.chatEnabled, input.whatsappEnabled, input.supportHoursEn, input.supportHoursGu,
           input.afterHoursMessageEn, input.afterHoursMessageGu, input.deliveryPromiseEn, input.deliveryPromiseGu, input.minimumAppVersion, input.maintenanceMode,
           input.maintenanceMessageEn, input.maintenanceMessageGu, input.showMaintenanceContact, input.flags.showTrials, input.flags.showSubscriptions, input.flags.showOffers,
-          input.flags.showQualityReports, input.flags.showSeasonalBanner, adminId],
+          input.flags.showQualityReports, input.flags.showSeasonalBanner, adminId,
+          input.latestAppVersion, input.rewardsEnabled, input.rewardsMinOrderPaise, input.rewardsExpiryDays],
       )
       if (!rows[0]) throw new Error('The app_settings row is missing. Run migration 0005_app_settings.sql.')
       return toSettings(rows[0])

@@ -7,6 +7,8 @@ export type FakeRedemption = { offerId: string; customerId: string; checkoutKey:
 /** Offers kept in memory for tests, with the same rules as the Postgres version. */
 export function createFakeOfferRepository(now: () => Date) {
   const rows: StoredOffer[] = []
+  /** Scratched, unused, unexpired cards: "offerId:customerId". */
+  const rewardCards = new Set<string>()
   const redemptions: FakeRedemption[] = []
   /** Sizes that are on sale and their prices; a gift whose size is missing counts as switched off. */
   const giftsOnSale = new Map<string, number>()
@@ -24,7 +26,7 @@ export function createFakeOfferRepository(now: () => Date) {
     async findByCode(code) { return rows.find(offer => offer.code === code) ?? null },
     async create(input: OfferInput) {
       if (input.code && rows.some(offer => offer.code === input.code)) throw Object.assign(new Error('duplicate key'), { code: '23505' })
-      const offer: StoredOffer = { ...input, id: randomUUID(), giftLabel: input.giftVariantId ? 'Gift' : null, giftProductId: null, createdAt: stamp(), updatedAt: stamp() }
+      const offer: StoredOffer = { ...input, id: randomUUID(), giftLabel: input.giftVariantId ? 'Gift' : null, giftProductId: null, imageKey: null, createdAt: stamp(), updatedAt: stamp() }
       rows.push(offer)
       return offer
     },
@@ -43,6 +45,7 @@ export function createFakeOfferRepository(now: () => Date) {
     },
     async usage(offerIds, customerId) { return new Map(offerIds.map(id => [id, usageOf(id, customerId)])) },
     async giftPricePaise(variantId) { return giftsOnSale.get(variantId) ?? null },
+    async hasUsableRewardCard(offerId, customerId) { return rewardCards.has(`${offerId}:${customerId}`) },
   }
-  return { repository, rows, redemptions, usageOf, giftsOnSale }
+  return { repository, rows, redemptions, usageOf, giftsOnSale, rewardCards }
 }

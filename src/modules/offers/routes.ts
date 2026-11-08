@@ -31,5 +31,6 @@ export function createAdminOfferRouter({ auth, offers, allowedOrigins }: { auth:
 export function createPublicOfferRouter({ offers }: { offers: OfferService }): Router {
   const router = Router()
   router.get('/', async (_request: Request, response: Response) => { response.json({ offers: await offers.listPublic() }) })
+  router.get('/:id', validate('params', offerIdParamsSchema), async (request: Request, response: Response) => { response.json({ offer: await offers.getPublic(idOf(request)) }) })
   return router
 }

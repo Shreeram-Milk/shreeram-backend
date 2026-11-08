@@ -31,7 +31,7 @@ export function formatDayGujarati(date: string): string {
 }
 
 /** The only screens a tapped message may open. Anything else is dropped, so a message can never send the app somewhere unexpected. */
-const ALLOWED_LINKS = ['/order-tracking?orderId=', '/subscription-manage?id=', '/orders', '/subscriptions', '/notifications', '/offers'] as const
+const ALLOWED_LINKS = ['/order-tracking?orderId=', '/subscription-manage?id=', '/orders', '/subscriptions', '/notifications', '/offers', '/offer?offerId=', '/rewards'] as const
 export function safeLink(link: string | null | undefined): string | null {
   return link && ALLOWED_LINKS.some(prefix => link.startsWith(prefix)) && !/\s/.test(link) && link.length <= 200 ? link : null
 }

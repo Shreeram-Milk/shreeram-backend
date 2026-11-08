@@ -1,5 +1,5 @@
 /** The automatic messages the system can send. The events are fixed by the system; staff edit only the wording. */
-export const EVENT_KEYS = ['order_placed', 'order_cancelled', 'out_for_delivery', 'delivered', 'day_skipped', 'credit_limit_reached', 'payment_requested', 'refund_sent', 'rider_arriving'] as const
+export const EVENT_KEYS = ['order_placed', 'order_cancelled', 'out_for_delivery', 'delivered', 'day_skipped', 'credit_limit_reached', 'payment_requested', 'refund_sent', 'rider_arriving', 'reward_won'] as const
 export type NotificationEventKey = (typeof EVENT_KEYS)[number]
 
 /** What each message is allowed to mention: `{{order}}` in the wording is replaced by the real value. */
@@ -18,6 +18,7 @@ export const EVENT_DEFINITIONS: EventDefinition[] = [
   { key: 'payment_requested', label: 'Payment requested', trigger: 'When staff ask a credit customer to pay.', placeholders: ['amount'] },
   { key: 'refund_sent', label: 'Refund sent', trigger: 'When staff record that a refund was sent.', placeholders: ['amount', 'order'] },
   { key: 'rider_arriving', label: 'Rider arriving', trigger: 'When the rider checks in at a PIN code in the rider app: sent once to each customer who has an open order there.', placeholders: ['order', 'window'] },
+  { key: 'reward_won', label: 'Scratch card won', trigger: 'When a delivered order earns a scratch card (Rewards switched on in App Settings). Tapping it opens the card.', placeholders: ['order'] },
 ]
 
 export const isEventKey = (value: string): value is NotificationEventKey => (EVENT_KEYS as readonly string[]).includes(value)

@@ -61,11 +61,14 @@ export function createRiderService({ repository, auth, plans, orders, notifier, 
       return { date, windows: await repository.windows(date) }
     },
 
-    /** The houses still to visit in one window (delivered and missed ones are gone from it), and which PIN codes are already checked in. */
+    /**
+     * The houses still to visit in one window, the houses already finished (delivered or missed, kept so the rider can see how each
+     * one ended), and which PIN codes are already checked in.
+     */
     async sheet(slotId: string) {
       const date = today()
-      const [sheet, checkIns] = await Promise.all([plans.riderSheetFor(date, slotId), repository.checkIns(date, slotId)])
-      return { sheet, checkIns }
+      const [sheet, checkIns, done] = await Promise.all([plans.riderSheetFor(date, slotId), repository.checkIns(date, slotId), repository.closedStops(date, slotId)])
+      return { sheet, checkIns, done }
     },
 
     /**

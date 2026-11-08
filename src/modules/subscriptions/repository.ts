@@ -159,7 +159,7 @@ export async function insertSubscription(client: Pick<PoolClient, 'query'>, draf
   if (draft.offer) {
     // Counted once, under a lock on the offer, in the same transaction that starts the plan.
     const checkoutKey = `sub:${id}`
-    await lockOffer(client, draft.customerId, { id: draft.offer.id, checkoutKey })
+    await lockOffer(client, draft.customerId, { id: draft.offer.id, checkoutKey }, 'plan')
     await client.query('insert into offer_redemptions (offer_id, customer_id, checkout_key, subscription_id, discount_paise) values ($1, $2, $3, $4, $5)', [draft.offer.id, draft.customerId, checkoutKey, id, draft.offer.discountPaise])
   }
   await client.query(

@@ -93,7 +93,7 @@ describe('public banners (what the app reads)', () => {
     const response = await request(api.app).get('/public/banners')
     expect(response.status).toBe(200)
     expect(response.body.banners.map((banner: { titleEn: string }) => banner.titleEn)).toEqual(['First', 'Second'])
-    expect(Object.keys(response.body.banners[0]).sort()).toEqual(['ctaTarget', 'ctaType', 'id', 'imageUrl', 'labelEn', 'labelGu', 'messageEn', 'messageGu', 'sortOrder', 'titleEn', 'titleGu', 'type'])
+    expect(Object.keys(response.body.banners[0]).sort()).toEqual(['ctaTarget', 'ctaType', 'id', 'imageUrl', 'labelEn', 'labelGu', 'messageEn', 'messageGu', 'showText', 'sortOrder', 'titleEn', 'titleGu', 'type'])
     clock.set('2026-10-11T06:00:00.000Z')
     expect((await request(api.app).get('/public/banners')).body.banners.map((banner: { titleEn: string }) => banner.titleEn)).toEqual(['First', 'Starts later', 'Second'])
   })

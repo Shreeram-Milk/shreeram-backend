@@ -24,6 +24,8 @@ type Dependencies = {
   offers?: Pick<OfferService, 'evaluate'>
   /** Tells the customer when staff move an order along or skip one of their plan days. Never blocks or fails the change itself. */
   notifier?: Notifier
+  /** After an order is marked delivered (gives a scratch card when it qualifies). Never blocks or fails the change itself. */
+  onDelivered?: (orderId: string) => Promise<void>
   now?: () => Date
 }
 
@@ -56,7 +58,7 @@ type Analysed = { quote: Quote; groups: OrderGroup[]; address: CustomerAddress; 
 
 const notFoundOrder = () => new AppError(404, 'ORDER_NOT_FOUND', 'That order does not exist.')
 
-export function createOrderService({ repository, addresses, delivery, audit, payments, offers, notifier = noopNotifier, now = () => new Date() }: Dependencies) {
+export function createOrderService({ repository, addresses, delivery, audit, payments, offers, notifier = noopNotifier, onDelivered, now = () => new Date() }: Dependencies) {
   /**
    * After staff change an order's status: out for delivery and delivered tell the customer; a plan day cancelled by staff tells them it
    * was skipped (it is added at the end), and a one-time order cancelled by staff tells them it was cancelled. The same order and status is announced only once, however many times the button is pressed.
@@ -87,6 +89,8 @@ export function createOrderService({ repository, addresses, delivery, audit, pay
     } catch {
       // The status change already succeeded; failing to tell the customer must not undo or hide it.
     }
+    // After "delivered" reaches the customer, a qualifying order earns its scratch card.
+    if (status === 'delivered' && onDelivered) await onDelivered(orderId).catch(() => undefined)
   }
 
   /** Tells the customer their order is placed. Once per order, however many times it runs, and never fails the caller. */

@@ -26,7 +26,14 @@ export const appSettingsSchema = z.object({
   afterHoursMessageGu: text(160),
   deliveryPromiseEn: text(120),
   deliveryPromiseGu: text(120),
+  /** Emergency only: apps older than this are stopped until they update. */
   minimumAppVersion: z.string().trim().regex(/^\d+\.\d+\.\d+$/, 'Use the format 1.0.0.'),
+  /** The newest app on the Play Store: older apps show a small "Update available" strip and keep working. */
+  latestAppVersion: z.string().trim().regex(/^\d+\.\d+\.\d+$/, 'Use the format 1.0.0.').default('1.0.0'),
+  /** Scratch cards: a delivered order of at least this amount earns one card. */
+  rewardsEnabled: z.boolean().default(false),
+  rewardsMinOrderPaise: z.number().int('Use a whole number.').min(0).max(100_000_000).default(0),
+  rewardsExpiryDays: z.number().int('Use a whole number.').min(1, 'Use 1 to 365 days.').max(365, 'Use 1 to 365 days.').default(30),
   maintenanceMode: z.boolean(),
   maintenanceMessageEn: text(200),
   maintenanceMessageGu: text(200),
