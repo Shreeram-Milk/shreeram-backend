@@ -319,10 +319,12 @@ export function createOrderService({ repository, addresses, delivery, audit, pay
 
     listMine: (customerId: string, query: CustomerOrderListQuery) => repository.listForCustomer(customerId, query),
 
-    async getMine(customerId: string, orderId: string): Promise<OrderView & { canCancel: boolean }> {
+    /** One order of this customer, whether it can still be cancelled, and when it reached each status (for the tracking screen). */
+    async getMine(customerId: string, orderId: string): Promise<OrderView & { canCancel: boolean; timeline: Array<{ status: string; at: string }> }> {
       const order = await repository.findForCustomer(customerId, orderId)
       if (!order) throw notFoundOrder()
-      return { ...order, canCancel: customerCanCancel(order, now()) }
+      const timeline = repository.statusTimes ? await repository.statusTimes(orderId) : []
+      return { ...order, canCancel: customerCanCancel(order, now()), timeline }
     },
 
     async cancelMine(customerId: string, orderId: string, reason: string): Promise<OrderView> {

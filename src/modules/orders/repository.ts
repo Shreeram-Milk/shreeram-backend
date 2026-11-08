@@ -88,6 +88,8 @@ export interface OrderRepository {
   placeOrders(customerId: string, orders: NewOrder[], now: Date): Promise<OrderView[]>
   listForCustomer(customerId: string, query: CustomerOrderListQuery): Promise<{ orders: OrderView[]; total: number }>
   findForCustomer(customerId: string, orderId: string): Promise<OrderView | null>
+  /** When the order first reached each status, for the tracking screen (not the money notes). Optional: tests may leave it out. */
+  statusTimes?(orderId: string): Promise<Array<{ status: string; at: string }>>
   /** This customer's orders (one-off and subscription) delivered between two dates, for the delivery calendar. */
   deliveriesBetween(customerId: string, from: string, to: string): Promise<OrderView[]>
   /**
@@ -297,6 +299,14 @@ export function createOrderRepository(database: Database): OrderRepository {
     async findForCustomer(customerId, orderId) {
       const { rows } = await database.query<Row>(`select ${ORDER_COLUMNS} from orders o where o.id = $1 and o.customer_id = $2`, [orderId, customerId])
       return (await withItems(rows))[0]?.order ?? null
+    },
+
+    async statusTimes(orderId) {
+      const { rows } = await database.query<Row>(
+        'select to_status, min(created_at) as at from order_status_history where order_id = $1 and (from_status is distinct from to_status) group by to_status order by min(created_at)',
+        [orderId],
+      )
+      return rows.map(row => ({ status: String(row.to_status), at: row.at instanceof Date ? row.at.toISOString() : String(row.at) }))
     },
 
     async adminList({ search, status, date, slotId, source, productId, payment, page, pageSize }) {
