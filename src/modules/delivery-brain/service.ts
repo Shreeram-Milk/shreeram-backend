@@ -9,7 +9,7 @@ export type SlotRule = SlotOffer & { condition: CutoffCondition | null }
 export type SlotRules = { served: true; deliveryMethod: DeliveryMethod; slots: SlotRule[] } | { served: false; reason: NotServedReason }
 export type NotServedReason = 'INVALID_PIN' | 'PRODUCT_UNAVAILABLE' | 'NOT_SERVED'
 export type DeliveryCheck =
-  | { served: true; deliveryMethod: DeliveryMethod; locality: string; slots: SlotOffer[] }
+  | { served: true; deliveryMethod: DeliveryMethod; locality: string; slots: SlotOffer[]; serviceAreaId?: string; hasLocalOverrides?: true }
   | { served: false; reason: NotServedReason }
 /** One way of delivering that serves a PIN, as the phone shows it. */
 export type ServedOption = { optionId: string; name: string; deliveryMethod: DeliveryMethod; locality: string; slots: SlotOffer[] }
@@ -30,7 +30,12 @@ export function createDeliveryBrainService({ repository, now = () => new Date() 
   async function evaluate(profile: BrainSetup, pinCode: string): Promise<DeliveryCheck> {
     const result = await evaluateWithRules(profile, pinCode)
     if (!result.served) return result
-    return { served: true, deliveryMethod: result.deliveryMethod, locality: result.locality, slots: result.slots.map(({ condition: _condition, ...slot }) => slot) }
+    return {
+      served: true, deliveryMethod: result.deliveryMethod, locality: result.locality,
+      slots: result.slots.map(({ condition: _condition, ...slot }) => slot),
+      ...(profile.localOverride ? { serviceAreaId: profile.area.id } : {}),
+      ...(profile.hasLocalOverrides ? { hasLocalOverrides: true } : {}),
+    }
   }
 
   async function evaluateWithRules(profile: BrainSetup, pinCode: string): Promise<{ served: true; deliveryMethod: DeliveryMethod; locality: string; slots: SlotRule[] } | { served: false; reason: NotServedReason }> {
@@ -59,14 +64,14 @@ export function createDeliveryBrainService({ repository, now = () => new Date() 
   return {
     async check(pinCode: string, productId: string): Promise<DeliveryCheck> {
       if (!PIN_CODE.test(pinCode)) return notServed('INVALID_PIN')
-      const setup = await repository.findProductSetup(productId)
+      const setup = await repository.findProductSetup(productId, pinCode)
       return setup ? evaluate(setup, pinCode) : notServed('PRODUCT_UNAVAILABLE')
     },
 
     /** Like `check`, with each slot's cut-off condition: subscriptions need the lock time of any later date, not just the first. */
     async slotRules(pinCode: string, productId: string): Promise<SlotRules> {
       if (!PIN_CODE.test(pinCode)) return notServed('INVALID_PIN')
-      const setup = await repository.findProductSetup(productId)
+      const setup = await repository.findProductSetup(productId, pinCode)
       if (!setup) return notServed('PRODUCT_UNAVAILABLE')
       const result = await evaluateWithRules(setup, pinCode)
       return result.served ? { served: true, deliveryMethod: result.deliveryMethod, slots: result.slots } : result

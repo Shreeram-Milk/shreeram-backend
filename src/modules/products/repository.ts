@@ -8,8 +8,8 @@ export type ProductVariant = Omit<VariantInput, 'id'> & { id: string }
 /** A stored picture: its id (what the admin links) and its private storage key (turned into a short-lived link by the service). */
 export type StoredImage = { assetId: string; key: string }
 
-type ProductFields = Omit<ProductInput, 'variants' | 'primaryImageAssetId' | 'galleryAssetIds'>
-export type Product = ProductFields & { id: string; updatedAt: string; variants: ProductVariant[]; primaryImage: StoredImage | null; gallery: StoredImage[] }
+type ProductFields = Omit<ProductInput, 'variants' | 'primaryImageAssetId' | 'galleryAssetIds' | 'localDeliveryAreaIds'>
+export type Product = ProductFields & { id: string; updatedAt: string; variants: ProductVariant[]; primaryImage: StoredImage | null; gallery: StoredImage[]; localDeliveryAreaIds: string[] }
 
 /** One line of the admin product list. */
 export type ProductSummary = {
@@ -58,7 +58,8 @@ const iso = (value: unknown) => (value instanceof Date ? value.toISOString() : S
 const strings = (value: unknown): string[] => (Array.isArray(value) ? value.map(String) : [])
 
 const PRODUCT_COLUMNS = `p.id, p.name, p.name_gu, p.category_id, p.sku, p.short_description_en, p.short_description_gu, p.long_description_en, p.long_description_gu,
-  p.nutrition_en, p.nutrition_gu, p.highlights_en, p.highlights_gu, p.badges, p.primary_image_asset_id, p.purchase_methods, p.delivery_method, p.service_area_id, p.cutoff_rule_id, p.include_in_production_planning, p.excluded_from_credit, p.status, p.updated_at, m.object_key as primary_key`
+  p.nutrition_en, p.nutrition_gu, p.highlights_en, p.highlights_gu, p.badges, p.primary_image_asset_id, p.purchase_methods, p.delivery_method, p.service_area_id, p.cutoff_rule_id, p.include_in_production_planning, p.excluded_from_credit, p.status, p.updated_at, m.object_key as primary_key,
+  array(select service_area_id from product_local_delivery_areas where product_id = p.id order by service_area_id) as local_delivery_area_ids`
 const PRODUCT_FROM = "products p left join media_assets m on m.id = p.primary_image_asset_id and m.status = 'ready'"
 const VARIANT_COLUMNS = 'id, product_id, name, sku, price_paise, compare_at_price_paise, status, display_unit, display_quantity::float8 as display_quantity, production_unit, production_quantity::float8 as production_quantity'
 
@@ -78,6 +79,7 @@ const toProduct = (row: Row, related: Related): Product => {
     nutritionEn: String(row.nutrition_en), nutritionGu: String(row.nutrition_gu), highlightsEn: strings(row.highlights_en), highlightsGu: strings(row.highlights_gu),
     badges: strings(row.badges) as Product['badges'], purchaseMethods: strings(row.purchase_methods) as PurchaseMethod[],
     deliveryMethod: (row.delivery_method as DeliveryMethod | null) ?? null, serviceAreaId: row.service_area_id ? String(row.service_area_id) : null, cutoffRuleId: row.cutoff_rule_id ? String(row.cutoff_rule_id) : null,
+    localDeliveryAreaIds: strings(row.local_delivery_area_ids),
     includeInProductionPlanning: Boolean(row.include_in_production_planning), excludedFromCredit: Boolean(row.excluded_from_credit), trialPlanIds: related.trials.get(id) ?? [], subscriptionRuleIds: related.rules.get(id) ?? [],
     status: row.status as ProductStatus, updatedAt: iso(row.updated_at), variants: related.variants.get(id) ?? [],
     primaryImage: row.primary_image_asset_id && row.primary_key ? { assetId: String(row.primary_image_asset_id), key: String(row.primary_key) } : null, gallery: related.gallery.get(id) ?? [],
@@ -145,6 +147,10 @@ export function createProductRepository(database: Database): ProductRepository {
       productId = String((rows[0] as Row).id)
     }
     // The small link lists are replaced as a set.
+    if (input.localDeliveryAreaIds !== undefined) {
+      await client.query('delete from product_local_delivery_areas where product_id = $1', [productId])
+      if (input.localDeliveryAreaIds.length > 0) await client.query('insert into product_local_delivery_areas (product_id, service_area_id) select $1, unnest($2::uuid[])', [productId, input.localDeliveryAreaIds])
+    }
     await client.query('delete from product_gallery_images where product_id = $1', [productId])
     if (input.galleryAssetIds.length > 0) {
       await client.query('insert into product_gallery_images (product_id, media_asset_id, position) select $1, a, p - 1 from unnest($2::uuid[]) with ordinality as t(a, p)', [productId, input.galleryAssetIds])

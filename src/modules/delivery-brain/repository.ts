@@ -14,12 +14,14 @@ export type BrainSetup = {
   area: { id: string; coverageType: CoverageType; status: 'active' | 'inactive'; state: string }
   /** The product's cut-off rule, one entry per slot; empty when the product has none. */
   conditions: Array<CutoffCondition & { deliverySlotId: string }>
+  localOverride?: boolean
+  hasLocalOverrides?: boolean
 }
 
 /** The read-only questions the delivery brain asks. The Postgres version below is the real one; tests use a fake. */
 export interface DeliveryBrainRepository {
   /** How a live product is delivered, or null when the product is not live or is not set up for delivery. */
-  findProductSetup(productId: string): Promise<BrainSetup | null>
+  findProductSetup(productId: string, pinCode?: string): Promise<BrainSetup | null>
   /** The different ways the live products are delivered (one entry per method, area and cut-off rule), at most `limit`, in area-name order. */
   listActiveSetups(limit: number): Promise<BrainSetup[]>
   /** An active PIN of the area with its active slots, or null when the PIN is not there, is switched off, or has no active slot. */
@@ -39,20 +41,45 @@ const toSetup = (row: Row): BrainSetup => ({
   id: `${String(row.delivery_method)}:${String(row.area_id)}:${row.cutoff_rule_id ? String(row.cutoff_rule_id) : 'none'}`, name: String(row.area_name), deliveryMethod: row.delivery_method as DeliveryMethod,
   area: { id: String(row.area_id), coverageType: row.coverage_type as CoverageType, status: row.area_status as BrainSetup['area']['status'], state: String(row.state) },
   conditions: row.conditions as BrainSetup['conditions'],
+  localOverride: row.local_override === true,
+  hasLocalOverrides: row.has_local_overrides === true,
 })
 
 export function createDeliveryBrainRepository(database: Database): DeliveryBrainRepository {
   return {
-    async findProductSetup(productId) {
+    async findProductSetup(productId, pinCode) {
       const { rows } = await database.query<Row>(
-        `select p.delivery_method, p.cutoff_rule_id, a.id as area_id, a.name as area_name, a.coverage_type, a.status as area_status, a.state, ${CONDITIONS} ${SETUP_FROM} and p.id = $1`,
-        [productId],
+        `select case when local_area.id is not null then 'local_delivery' else p.delivery_method end as delivery_method,
+           p.cutoff_rule_id, coalesce(local_area.id, a.id) as area_id, coalesce(local_area.name, a.name) as area_name,
+           coalesce(local_area.coverage_type, a.coverage_type) as coverage_type, a.status as area_status,
+           coalesce(local_area.state, a.state) as state, ${CONDITIONS},
+           local_area.id is not null as local_override,
+           exists(select 1 from product_local_delivery_areas where product_id = p.id) as has_local_overrides
+         from products p join service_areas a on a.id = p.service_area_id
+         left join lateral (
+           select la.id, la.name, la.coverage_type, la.state
+           from product_local_delivery_areas link
+           join service_areas la on la.id = link.service_area_id and la.status = 'active' and la.coverage_type = 'pin_code'
+           join service_area_pins pin on pin.service_area_id = la.id and pin.pin_code = $2 and pin.status = 'active'
+           where p.delivery_method = 'shipping' and link.product_id = p.id
+             and exists (select 1 from service_area_pin_slots ps join delivery_slots ds on ds.id = ps.delivery_slot_id and ds.status = 'active' where ps.pin_id = pin.id)
+           order by la.name, la.id limit 1
+         ) local_area on true
+         where p.status = 'active' and a.status = 'active' and p.id = $1`,
+        [productId, pinCode ?? null],
       )
       return rows[0] ? toSetup(rows[0]) : null
     },
     async listActiveSetups(limit) {
       const { rows } = await database.query<Row>(
-        `select distinct p.delivery_method, p.cutoff_rule_id, a.id as area_id, a.name as area_name, a.coverage_type, a.status as area_status, a.state, ${CONDITIONS} ${SETUP_FROM} order by a.name, p.delivery_method limit $1`,
+        `select distinct p.delivery_method, p.cutoff_rule_id, a.id as area_id, a.name as area_name, a.coverage_type, a.status as area_status, a.state, ${CONDITIONS} ${SETUP_FROM}
+         union
+         select 'local_delivery', null, la.id, la.name, la.coverage_type, la.status, la.state, '[]'::jsonb
+         from product_local_delivery_areas link
+         join products p on p.id = link.product_id and p.status = 'active' and p.delivery_method = 'shipping'
+         join service_areas a on a.id = p.service_area_id and a.status = 'active'
+         join service_areas la on la.id = link.service_area_id and la.status = 'active' and la.coverage_type = 'pin_code'
+         order by area_name, delivery_method limit $1`,
         [limit],
       )
       return rows.map(toSetup)

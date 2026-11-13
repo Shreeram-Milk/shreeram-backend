@@ -608,7 +608,7 @@ export function createFakeProductRepository(stores: {
     const keptIds = new Set(kept.map(variant => variant.id))
     const dropped = [...old.values()].filter(variant => !keptIds.has(variant.id)).map((variant): ProductVariant => ({ ...variant, status: 'inactive' }))
     const { primaryImageAssetId, galleryAssetIds } = input
-    return { ...input, id, updatedAt: stamp(), variants: [...kept, ...dropped], primaryImage: keyOf(primaryImageAssetId), gallery: galleryAssetIds.map(keyOf).filter((image): image is StoredImage => image !== null) }
+    return { ...input, id, updatedAt: stamp(), variants: [...kept, ...dropped], primaryImage: keyOf(primaryImageAssetId), gallery: galleryAssetIds.map(keyOf).filter((image): image is StoredImage => image !== null), localDeliveryAreaIds: input.localDeliveryAreaIds ?? current?.localDeliveryAreaIds ?? [] }
   }
   const categoryOf = (id: string) => stores.categories.rows.find(item => item.id === id)
   const sorted = () => [...rows].sort((a, b) => a.name.localeCompare(b.name))

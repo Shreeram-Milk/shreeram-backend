@@ -54,6 +54,7 @@ export const productInputSchema = z.object({
   deliveryMethod: z.enum(DELIVERY_METHODS).nullable().default(null),
   /** Where it can be delivered. */
   serviceAreaId: idOrNull,
+  localDeliveryAreaIds: z.array(z.uuid('Choose a local delivery area.')).max(30).transform(ids => [...new Set(ids)]).optional(),
   /** Local delivery only: the last time to order for each delivery window. */
   cutoffRuleId: idOrNull,
   includeInProductionPlanning: z.boolean().default(false),

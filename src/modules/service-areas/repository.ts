@@ -108,13 +108,16 @@ export function createServiceAreaRepository(database: Database): ServiceAreaRepo
       return rows.length > 0
     },
     async usage(id) {
-      const { rows } = await database.query<Row>("select count(*)::int as total, coalesce((array_agg(name order by name))[1:5], '{}') as names from products where service_area_id = $1", [id])
+      const { rows } = await database.query<Row>(`select count(*)::int as total, coalesce((array_agg(name order by name))[1:5], '{}') as names
+        from products p where p.service_area_id = $1 or exists (select 1 from product_local_delivery_areas a where a.product_id = p.id and a.service_area_id = $1)`, [id])
       const row = rows[0] as Row
       return [{ label: 'products', count: Number(row.total), examples: (row.names as string[]) ?? [] }]
     },
     async countProductsBrokenBy(id, coverage) {
       const { rows } = await database.query<Row>(
-        "select count(*)::int as total from products where service_area_id = $1 and ((delivery_method = 'local_delivery' and $2 <> 'pin_code') or (delivery_method = 'shipping' and $2 = 'pin_code'))",
+        `select count(*)::int as total from products p
+         where (p.service_area_id = $1 and ((p.delivery_method = 'local_delivery' and $2 <> 'pin_code') or (p.delivery_method = 'shipping' and $2 = 'pin_code')))
+           or ($2 <> 'pin_code' and exists (select 1 from product_local_delivery_areas a where a.product_id = p.id and a.service_area_id = $1))`,
         [id, coverage],
       )
       return Number((rows[0] as Row).total)

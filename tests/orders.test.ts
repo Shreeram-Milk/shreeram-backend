@@ -93,6 +93,35 @@ describe('pricing and placing an order', () => {
     expect(courier).toMatchObject({ slot: null, totalPaise: 22000 })
   })
 
+  it('routes local overrides into the milk window and keeps its cutoff', async () => {
+    const api = await createTestApi()
+    const s = await shop(api)
+    const { token, addressId } = await customerSignUp(api, '9824612345')
+    const milk = api.deliveryAnswers.get(s.milk.id)
+    if (!milk?.served) throw new Error('shop should serve milk')
+    const localAreaId = s.milk.serviceAreaId
+    if (!localAreaId) throw new Error('milk needs a local area')
+    api.deliveryAnswers.set(s.ghee.id, {
+      served: true, deliveryMethod: 'local_delivery', locality: '', serviceAreaId: localAreaId, hasLocalOverrides: true,
+      slots: milk.slots.map(slot => ({ ...slot, earliestDate: '2026-10-10', orderBy: null, cancelBy: '2026-10-09T18:30:00.000Z' })),
+    })
+    const localItem = { variantId: s.gheeVariant, quantity: 1 }
+    const only = await quote(api, token, { addressId, lines: [localItem] })
+    expect(only.body.quote.orders[0]).toMatchObject({ deliveryMethod: 'local_delivery', deliveryDate: '2026-10-10' })
+    const placed = await place(api, token, {
+      addressId, lines: [{ variantId: s.milkVariant, quantity: 1, slotId: s.slot }, localItem],
+      slots: {}, idempotencyKey: 'key-local-basket',
+    })
+    expect(placed.status).toBe(201)
+    expect(placed.body.orders).toHaveLength(1)
+    expect(placed.body.orders[0]).toMatchObject({ deliveryMethod: 'local_delivery', deliveryDate: '2026-10-11', orderBy: '2026-10-10T15:30:00.000Z', cancelBy: milk.slots[0]?.cancelBy })
+    expect(placed.body.orders[0].items.map((item: { variantId: string }) => item.variantId)).toEqual([s.milkVariant, s.gheeVariant])
+
+    api.deliveryAnswers.set(s.ghee.id, { served: true, deliveryMethod: 'shipping', locality: '', slots: [], hasLocalOverrides: true })
+    const courier = await quote(api, token, { addressId, lines: [{ ...localItem, slotId: s.slot }] })
+    expect(courier.body.quote.orders[0]).toMatchObject({ deliveryMethod: 'shipping', selectedSlotId: null })
+  })
+
   it('refuses items that are gone, products that cannot reach the address, and a slot that is not offered', async () => {
     const api = await createTestApi()
     const s = await shop(api)

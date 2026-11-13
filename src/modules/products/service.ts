@@ -70,6 +70,14 @@ export function createProductService({ repository, audit, storage }: Dependencie
       if (!status) issues.push({ field: 'cutoffRuleId', message: 'That cut-off rule does not exist.' })
       else if (status !== 'active' && current?.cutoffRuleId !== input.cutoffRuleId) issues.push({ field: 'cutoffRuleId', message: 'Choose an active cut-off rule.' })
     }
+    const localDeliveryAreaIds = input.deliveryMethod === 'shipping' ? input.localDeliveryAreaIds : []
+    if (localDeliveryAreaIds?.length) {
+      const areas = await Promise.all(localDeliveryAreaIds.map(id => repository.areaInfo(id)))
+      if (areas.some((area, index) => area?.coverageType !== 'pin_code'
+        || (area.status !== 'active' && !current?.localDeliveryAreaIds.includes(localDeliveryAreaIds[index] ?? '')))) {
+        issues.push({ field: 'localDeliveryAreaIds', message: 'Choose active PIN-code areas for local delivery.' })
+      }
+    }
 
     const trialPlanIds = input.purchaseMethods.includes('trial') ? input.trialPlanIds : []
     const subscriptionRuleIds = input.purchaseMethods.includes('subscription') ? input.subscriptionRuleIds : []
@@ -108,7 +116,7 @@ export function createProductService({ repository, audit, storage }: Dependencie
     if (await repository.nameExists(input.name, current?.id)) throw nameTakenError()
     if (input.sku && (await repository.skuTaken(input.sku, current?.id))) throw new AppError(409, 'SKU_TAKEN', 'This SKU is already used by another product.')
     if (await repository.variantSkuTaken(input.variants.map(variant => variant.sku).filter(Boolean), current?.id)) throw new AppError(409, 'SKU_TAKEN', 'A variant SKU is already used by another product.')
-    return { ...input, trialPlanIds, subscriptionRuleIds, galleryAssetIds }
+    return { ...input, trialPlanIds, subscriptionRuleIds, galleryAssetIds, localDeliveryAreaIds }
   }
 
   /** Customers have paid for (or are being charged for) deliveries of a running subscription or trial, so such a product cannot be switched off. */

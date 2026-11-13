@@ -10,7 +10,7 @@ import type { DeliveryMethod } from '../products/schema.js'
 import type { OfferService } from '../offers/service.js'
 import { distributeDiscount } from '../offers/rules.js'
 import type { Actor, AdminOrderView, NewOrder, OrderRepository, OrderView } from './repository.js'
-import { creditEligible, customerCanCancel, doorstepNoteOf, groupBySetup, lineTotalPaise, mergeLines, subtotalPaise, withinCreditLimit, type CartLine, type CheckoutVariant, type OrderGroup } from './rules.js'
+import { commonSlots, creditEligible, customerCanCancel, doorstepNoteOf, groupLocalBasket, lineTotalPaise, mergeLines, subtotalPaise, withinCreditLimit, type CartLine, type CheckoutVariant, type OrderGroup } from './rules.js'
 import type { AdminOrderListQuery, BulkStatus, CheckoutInput, CourierInput, CustomerOrderListQuery, OrderStatusChange, QuoteInput, ReturnMoney } from './schema.js'
 
 type Dependencies = {
@@ -123,7 +123,6 @@ export function createOrderService({ repository, addresses, delivery, audit, pay
         throw new AppError(409, 'ITEM_UNAVAILABLE', `${variant?.productName ?? 'An item in your cart'} is no longer available. Remove it to continue.`, { variantId })
       }
       if (!variant.purchaseMethods.includes('buy_once')) throw new AppError(409, 'BUY_ONCE_NOT_OFFERED', 'This product cannot be bought as a one-time purchase.')
-      if (variant.deliveryMethod === 'shipping' && slotId) throw new AppError(409, 'SLOT_NOT_AVAILABLE', 'Courier products do not use delivery windows.')
       return { variant, quantity, ...(slotId ? { slotId } : {}) }
     })
 
@@ -131,7 +130,18 @@ export function createOrderService({ repository, addresses, delivery, audit, pay
     const productIds = [...new Set(allLines.map(line => line.variant.productId))]
     const answers = new Map(await Promise.all(productIds.map(async id => [id, await delivery.check(address.pinCode, id)] as const)))
     // Items this PIN is not served for are set aside, not fatal: the customer can still order the rest. If none is left, the quote has no orders and placing is refused.
-    const lines = allLines.filter(line => answers.get(line.variant.productId)?.served)
+    const lines: CartLine[] = allLines.flatMap(line => {
+      const answer = answers.get(line.variant.productId)
+      if (!answer?.served) return []
+      if (answer.deliveryMethod === 'shipping' && line.slotId && !answer.hasLocalOverrides) {
+        throw new AppError(409, 'SLOT_NOT_AVAILABLE', 'Courier products do not use delivery windows.')
+      }
+      return [{
+        quantity: line.quantity,
+        variant: { ...line.variant, deliveryMethod: answer.deliveryMethod, serviceAreaId: answer.serviceAreaId ?? line.variant.serviceAreaId },
+        ...(line.slotId && answer.deliveryMethod === 'local_delivery' ? { slotId: line.slotId } : {}),
+      }]
+    })
     const unavailable: UnavailableItem[] = allLines.filter(line => !answers.get(line.variant.productId)?.served).map(line => ({
       variantId: line.variant.variantId, productId: line.variant.productId, productName: line.variant.productName, productNameGu: line.variant.productNameGu, variantName: line.variant.variantName, quantity: line.quantity,
     }))
@@ -139,16 +149,19 @@ export function createOrderService({ repository, addresses, delivery, audit, pay
     const money = await repository.customerMoney(customerId)
     if (!money || money.status !== 'active') throw new AppError(403, 'CUSTOMER_NOT_ACTIVE', 'This account cannot place orders.')
     const problems: QuoteProblem[] = []
-    const groups = groupBySetup(lines)
+    const slotsFor = (line: CartLine) => {
+      const answer = answers.get(line.variant.productId)
+      return answer?.served ? answer.slots : []
+    }
+    const groups = groupLocalBasket(lines, slotsFor)
     const chosen = new Map<string, SlotOffer | null>()
     const today = indiaClock(now()).date
 
     const orders = groups.map((group): QuoteOrder => {
-      const answer = answers.get(group.lines[0]?.variant.productId ?? '')
-      const slots = group.deliveryMethod === 'local_delivery' && answer?.served ? answer.slots : []
+      const slots = group.deliveryMethod === 'local_delivery' ? commonSlots(group.lines, slotsFor) : []
       // The customer's choice must be one of the offered windows. With no choice made and only one window offered, that one is used.
       // An explicit choice on the review screen wins; otherwise the window picked on the product page, if it is still offered.
-      const wanted = input.slots[group.key] ?? group.lines[0]?.slotId
+      const wanted = input.slots[group.key] ?? group.lines.find(line => line.slotId)?.slotId
       const picked = wanted ? (slots.find(slot => slot.slotId === wanted) ?? null) : (slots.length === 1 ? (slots[0] ?? null) : null)
       chosen.set(group.key, picked)
       if (group.deliveryMethod === 'local_delivery' && !picked) {

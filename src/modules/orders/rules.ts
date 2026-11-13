@@ -1,4 +1,5 @@
 import { instantAt } from '../delivery-brain/rules.js'
+import type { SlotOffer } from '../delivery-brain/service.js'
 import type { DeliveryMethod } from '../products/schema.js'
 
 export const ORDER_STATUSES = ['placed', 'out_for_delivery', 'delivered', 'missed', 'cancelled'] as const
@@ -76,6 +77,49 @@ export function groupBySetup(lines: CartLine[]): OrderGroup[] {
     else groups.set(key, { key, deliveryMethod, serviceAreaId, lines: [line] })
   }
   return [...groups.values()].sort((a, b) => a.key.localeCompare(b.key))
+}
+
+/** Flexible local items can share a window with an order subject to production cutoffs. */
+export function groupLocalBasket(lines: CartLine[], slotsFor: (line: CartLine) => SlotOffer[]): OrderGroup[] {
+  const groups = groupBySetup(lines)
+  const fixed = groups.filter(group => group.deliveryMethod !== 'local_delivery' || group.lines.some(line => line.variant.cutoffRuleId))
+  const flexible = groups.filter(group => !fixed.includes(group))
+  for (const group of flexible) {
+    const target = fixed.find(candidate => {
+      if (candidate.deliveryMethod !== 'local_delivery' || candidate.serviceAreaId !== group.serviceAreaId) return false
+      const combined = [...candidate.lines, ...group.lines]
+      const requested = new Set(combined.flatMap(line => line.slotId ? [line.slotId] : []))
+      if (requested.size > 1) return false
+      return commonSlots(combined, slotsFor).some(slot => requested.size === 0 || requested.has(slot.slotId))
+    })
+    if (target) target.lines.push(...group.lines)
+    else fixed.push(group)
+  }
+  return fixed.sort((a, b) => a.key.localeCompare(b.key))
+}
+
+/** Each offered window must serve every line, on the latest earliest date across the lines. */
+export function commonSlots(lines: CartLine[], slotsFor: (line: CartLine) => SlotOffer[]): SlotOffer[] {
+  const offerings = lines.map(slotsFor)
+  const first = offerings.shift() ?? []
+  return first.flatMap(slot => {
+    const matches = [slot]
+    for (const offering of offerings) {
+      const same = offering.find(candidate => candidate.slotId === slot.slotId)
+      if (!same) return []
+      matches.push(same)
+    }
+    const earliestDate = matches.reduce((latest, match) => match.earliestDate > latest ? match.earliestDate : latest, slot.earliestDate)
+    const cutoffMatches = matches.filter(match => match.orderBy !== null)
+    // A flexible item can ride with milk without imposing its standalone midnight cancellation fallback.
+    const deadline = (key: 'orderBy' | 'cancelBy') => (cutoffMatches.length ? cutoffMatches : matches).map(match => {
+      const value = match[key]
+      if (!value) return null
+      const shift = Date.parse(earliestDate) - Date.parse(match.earliestDate)
+      return new Date(Date.parse(value) + shift).toISOString()
+    }).filter((value): value is string => value !== null).sort()[0]
+    return [{ ...slot, earliestDate, orderBy: deadline('orderBy') ?? null, cancelBy: deadline('cancelBy') ?? slot.cancelBy }]
+  })
 }
 
 export const lineTotalPaise = (line: CartLine): number => line.variant.pricePaise * line.quantity
