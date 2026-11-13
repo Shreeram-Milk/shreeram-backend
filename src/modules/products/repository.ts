@@ -1,6 +1,6 @@
 import { withTransaction } from '../../db/transaction.js'
 import type { Database } from '../../db/pool.js'
-import { guardUnique, likePattern, type RecordStatus } from '../master-data/shared.js'
+import { guardDelete, guardUnique, likePattern, type RecordStatus } from '../master-data/shared.js'
 import type { CoverageType } from '../service-areas/schema.js'
 import type { DeliveryMethod, ProductInput, ProductListQuery, ProductStatus, PublicProductQuery, PurchaseMethod, VariantInput } from './schema.js'
 
@@ -29,6 +29,7 @@ export interface ProductRepository {
   /** Saves the product, its pictures, links and variants as one all-or-nothing step. Variants left out of `input` are switched off, never deleted. */
   create(input: ProductInput, adminId: string): Promise<Product>
   update(id: string, input: ProductInput, adminId: string): Promise<Product | null>
+  remove(id: string): Promise<'deleted' | 'missing' | 'in_use'>
   setStatus(id: string, status: ProductStatus, adminId: string): Promise<Product | null>
   /** Marks (or unmarks) a product as not available on credit, without touching anything else. */
   setExcludedFromCredit(id: string, excluded: boolean, adminId: string): Promise<Product | null>
@@ -213,6 +214,24 @@ export function createProductRepository(database: Database): ProductRepository {
       })
       return found ? findById(id) : null
     }),
+    remove: id => guardDelete(() => withTransaction(database, async client => {
+      const product = await client.query('select id from products where id = $1 for update', [id])
+      if (!product.rowCount) return 'missing'
+      const references = await client.query(
+        `select 1 from payments
+         where status = 'pending' and purpose in ('order', 'subscription')
+           and (jsonb_path_exists(checkout_snapshot, '$.orders[*].items[*] ? (@.productId == $id)', jsonb_build_object('id', $1::text))
+             or checkout_snapshot #>> '{draft,productId}' = $1::text
+             or checkout_snapshot #>> '{draft,offer,gift,productId}' = $1::text)
+         union all
+         select 1 from subscriptions where status = 'active' and gift ->> 'productId' = $1::text
+         limit 1`, [id],
+      )
+      if (references.rowCount) return 'in_use'
+      await client.query('delete from product_variants where product_id = $1', [id])
+      await client.query('delete from products where id = $1', [id])
+      return 'deleted'
+    }), 'product'),
     async setStatus(id, status, adminId) {
       const { rows } = await database.query<Row>('update products set status = $2, updated_by = $3, updated_at = now() where id = $1 returning id', [id, status, adminId])
       return rows[0] ? findById(id) : null

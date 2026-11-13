@@ -19,6 +19,10 @@ export function createAdminProductRouter({ auth, products, allowedOrigins }: Opt
 
   router.get('/', validate('query', productListQuerySchema), async (request: Request, response: Response) => { response.json(await products.list(request.query as unknown as ProductListQuery)) })
   router.get('/:id', validate('params', recordIdParamsSchema), async (request: Request, response: Response) => { response.json({ product: await products.get(idOf(request)) }) })
+  router.delete('/:id', validate('params', recordIdParamsSchema), async (request: Request, response: Response) => {
+    await products.remove(idOf(request), actorOf(request))
+    response.sendStatus(204)
+  })
   router.post('/', validate('body', productInputSchema), async (request: Request, response: Response) => {
     response.status(201).json({ product: await products.create(request.body as ProductInput, actorOf(request)) })
   })

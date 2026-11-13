@@ -231,6 +231,18 @@ export function createPaymentRepository(database: Database): PaymentRepository {
 
   return {
     createPending: input => withTransaction(database, async client => {
+      const snapshot = input.snapshot
+      const productIds = snapshot.kind === 'order'
+        ? snapshot.orders.flatMap(order => order.items.map(item => item.productId))
+        : snapshot.kind === 'subscription'
+          ? [snapshot.draft.productId, ...(snapshot.draft.offer?.gift ? [snapshot.draft.offer.gift.productId] : [])]
+          : []
+      if (productIds.length > 0) {
+        const ids = [...new Set(productIds)]
+        // Coordinate with product deletion before storing a checkout that references those products.
+        const products = await client.query('select id from products where id = any($1::uuid[]) order by id for key share', [ids])
+        if (products.rowCount !== ids.length) throw new AppError(409, 'PRODUCT_UNAVAILABLE', 'A product in this checkout is no longer available.')
+      }
       const { rows } = await client.query<Row>(
         `insert into payments (customer_id, purpose, method, amount_paise, status, provider_reference, idempotency_key, payment_request_id, checkout_snapshot, expires_at)
          values ($1, $2, 'phonepe', $3, 'pending', $4, $5, $6, $7::jsonb, $8)

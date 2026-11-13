@@ -32,6 +32,19 @@ const live = (ids: Ids, extra: object = {}) => draft(ids, {
 })
 
 describe('products (admin)', () => {
+  it('deletes a product from the admin catalog and audits the deletion', async () => {
+    const api = await createTestApi()
+    const ids = await setup(api)
+    const { body } = await send(api, ids.cookie, 'post', '/admin/products', draft(ids, { variants: [variant()] }))
+    const id = body.product.id as string
+    const path = `/admin/products/${id}`
+
+    expect((await request(api.app).delete(path).set('Origin', ADMIN_ORIGIN)).status).toBe(401)
+    expect((await request(api.app).delete(path).set('Cookie', ids.cookie).set('Origin', ADMIN_ORIGIN)).status).toBe(204)
+    expect((await get(api, ids.cookie, path)).status).toBe(404)
+    expect(api.audit).toEqual(expect.arrayContaining([expect.objectContaining({ action: 'product_deleted', details: { productId: id } })]))
+  })
+
   it('needs a signed-in admin from the admin site', async () => {
     const api = await createTestApi()
     expect((await request(api.app).get('/admin/products')).status).toBe(401)

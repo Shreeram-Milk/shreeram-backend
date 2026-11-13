@@ -637,6 +637,13 @@ export function createFakeProductRepository(stores: {
     async findById(id) { return rows.find(row => row.id === id) ?? null },
     async create(input) { const product = build(randomUUID(), input); rows.push(product); return product },
     async update(id, input) { const index = rows.findIndex(row => row.id === id); const current = rows[index]; if (!current) return null; const product = build(id, input, current); rows[index] = product; return product },
+    async remove(id) {
+      const index = rows.findIndex(row => row.id === id)
+      if (index < 0) return 'missing'
+      if (stores.runningPlans?.(id)) return 'in_use'
+      rows.splice(index, 1)
+      return 'deleted'
+    },
     async setStatus(id, status) { const row = rows.find(item => item.id === id); if (!row) return null; row.status = status; return row },
     async setExcludedFromCredit(id, excluded) { const row = rows.find(item => item.id === id); if (!row) return null; row.excludedFromCredit = excluded; return row },
     async nameExists(name, excludingId) { return rows.some(row => row.id !== excludingId && row.name.trim().toLowerCase() === name.trim().toLowerCase()) },

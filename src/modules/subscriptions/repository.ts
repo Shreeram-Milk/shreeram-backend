@@ -143,6 +143,10 @@ const toBase = (row: Row): Omit<SubscriptionRecord, 'lines' | 'pauses' | 'skips'
 
 /** Writes a subscription and its slot lines inside the caller's transaction. Used directly by the payment step for online ones. */
 export async function insertSubscription(client: Pick<PoolClient, 'query'>, draft: SubscriptionDraft, paymentId: string | null): Promise<string> {
+  if (draft.offer?.gift) {
+    const gift = await client.query('select id from products where id = $1 for key share', [draft.offer.gift.productId])
+    if (!gift.rowCount) throw new AppError(409, 'PRODUCT_UNAVAILABLE', 'The gift product is no longer available.')
+  }
   const { rows } = await client.query<Row>(
     `insert into subscriptions (customer_id, kind, product_id, variant_id, product_name, product_name_gu, variant_name, unit_price_paise, include_in_production_planning, production_unit, production_quantity,
        subscription_rule_id, trial_plan_id, plan_name, schedule_type, weekdays, deliveries_per_line, start_date,

@@ -144,6 +144,13 @@ export function createProductService({ repository, audit, storage }: Dependencie
     },
     async get(id: string): Promise<AdminProduct> { return toAdminProduct(await get(id)) },
 
+    async remove(id: string, actor: Actor): Promise<void> {
+      const outcome = await repository.remove(id)
+      if (outcome === 'missing') throw notFound()
+      if (outcome === 'in_use') throw new AppError(409, 'IN_USE', 'This product is used by a pending checkout or an active subscription gift.')
+      await audit({ adminId: actor.adminId, action: 'product_deleted', details: { productId: id }, ip: actor.ip })
+    },
+
     async create(input: ProductInput, actor: Actor): Promise<AdminProduct> {
       if (input.variants.some(variant => variant.id)) throw invalid('variants', 'A new product cannot reuse existing variants.')
       const product = await repository.create(await prepare(input), actor.adminId)
