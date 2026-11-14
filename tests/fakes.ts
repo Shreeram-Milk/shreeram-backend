@@ -84,9 +84,9 @@ import { createOfferService } from '../src/modules/offers/service.js'
 import { createFakeOfferRepository, type FakeRedemption } from './fake-offers.js'
 import { createAdminAdjustmentRouter } from '../src/modules/prepaid-adjustments/routes.js'
 import { createAdjustmentService } from '../src/modules/prepaid-adjustments/service.js'
-import type { RefundRequest, WalletRepository } from '../src/modules/wallet/repository.js'
+import type { RefundPart, RefundRequest, TopUpPayment, WalletRepository } from '../src/modules/wallet/repository.js'
 import { createAdminWalletRouter, createCustomerWalletRouter } from '../src/modules/wallet/routes.js'
-import { topUpRoom, walletEnabled, type RefundStatus, type WalletDirection, type WalletEntryType } from '../src/modules/wallet/rules.js'
+import { leftToRefund, topUpRoom, walletEnabled, walletTotals, type RefundStatus, type WalletDirection, type WalletEntryType } from '../src/modules/wallet/rules.js'
 import { createWalletService } from '../src/modules/wallet/service.js'
 import type { Adjustment, AdjustmentRepository } from '../src/modules/prepaid-adjustments/repository.js'
 import { createAdminCreditRouter, createCustomerCreditRouter } from '../src/modules/credit/routes.js'
@@ -1194,11 +1194,28 @@ export function createFakePaymentRepository(stores: { orders: ReturnType<typeof 
  * PhonePe for tests. By default a payment completes at once for the amount asked (like the development test gateway); a test can
  * hold it pending, fail it, report a different amount, or make PhonePe unreachable.
  */
-type StoredRefund = RefundRequest & { idempotencyKey: string; handledBy: string | null }
-const plainRefund = ({ idempotencyKey: _key, handledBy: _by, ...refund }: StoredRefund): RefundRequest => refund
+type StoredRefund = Omit<RefundRequest, 'parts'> & { idempotencyKey: string; handledBy: string | null }
 
 export function createFakeWalletRepository(stores: { orders: ReturnType<typeof createFakeOrderRepository>; customers: Map<string, Customer>; now: () => Date }) {
   const refunds: StoredRefund[] = []
+  /** The PhonePe refunds staff recorded (the `refunds` table lines that point at a request). */
+  const parts: Array<RefundPart & { requestId: string }> = []
+  const plainRefund = ({ idempotencyKey: _key, handledBy: _by, ...refund }: StoredRefund): RefundRequest => ({
+    ...refund, parts: parts.filter(part => part.requestId === refund.id).map(({ requestId: _id, ...part }) => part),
+  })
+  const refundedOn = (paymentId: string) => parts.filter(part => part.paymentId === paymentId).reduce((sum, part) => sum + part.amountPaise, 0)
+  const topUpsOf = (customerId: string): TopUpPayment[] => stores.orders.payments
+    .filter(payment => payment.customerId === customerId && payment.purpose === 'wallet_topup' && ['paid', 'partially_refunded', 'refunded'].includes(payment.status))
+    .slice().reverse()
+    .map(payment => {
+      const source = { paymentId: payment.id, amountPaise: payment.amountPaise, refundedPaise: refundedOn(payment.id) }
+      return { ...source, merchantOrderId: payment.merchantOrderId, transactionId: payment.providerTransactionId, paidAt: payment.paidAt, leftPaise: leftToRefund(source) }
+    })
+  const totalsOf = (customerId: string) => walletTotals(stores.orders.wallet.filter(item => item.customerId === customerId), refunds.filter(item => item.customerId === customerId))
+  const customerOf = (customerId: string) => {
+    const customer = stores.customers.get(customerId)
+    return { customerId, name: customer?.name ?? '', phone: customer?.phone ?? '', email: customer?.email ?? '', customerType: customer?.customerType ?? '', status: customer?.status ?? '' }
+  }
   const adminRow = (refund: StoredRefund) => {
     const customer = stores.customers.get(refund.customerId)
     return { ...plainRefund(refund), customerName: customer?.name ?? '', customerPhone: customer?.phone ?? '', customerEmail: customer?.email ?? '' }
@@ -1232,7 +1249,7 @@ export function createFakeWalletRepository(stores: { orders: ReturnType<typeof c
       if (balance <= 0) throw new AppError(409, 'WALLET_EMPTY', 'There is no money in your wallet to refund.')
       const row: StoredRefund = {
         id: randomUUID(), customerId, amountPaise: balance, status: 'requested' as RefundStatus, customerNote: input.note, providerReference: '', staffNote: '',
-        requestedAt: stores.now().toISOString(), handledAt: null, idempotencyKey: input.idempotencyKey, handledBy: null,
+        requestedAt: stores.now().toISOString(), handledAt: null, completedAt: null, idempotencyKey: input.idempotencyKey, handledBy: null,
       }
       refunds.push(row)
       stores.orders.addWallet({ customerId, type: 'refund_hold', direction: 'debit', amountPaise: balance, paymentId: null, orderId: null, refundRequestId: row.id, description: 'Refund requested', createdBy: null }, stores.now())
@@ -1245,15 +1262,51 @@ export function createFakeWalletRepository(stores: { orders: ReturnType<typeof c
     async adminRefund(id) {
       const refund = refunds.find(item => item.id === id)
       if (!refund) return null
-      const topUps = stores.orders.payments.filter(payment => payment.customerId === refund.customerId && payment.purpose === 'wallet_topup' && payment.status === 'paid')
-        .map(payment => ({ paymentId: payment.id, merchantOrderId: payment.merchantOrderId, transactionId: payment.providerTransactionId, amountPaise: payment.amountPaise, paidAt: payment.paidAt }))
-      return { ...adminRow(refund), topUps }
+      return { ...adminRow(refund), topUps: topUpsOf(refund.customerId) }
+    },
+    async walletCustomers({ search, show, page, pageSize }) {
+      const ids = [...new Set(stores.orders.wallet.map(item => item.customerId))]
+      const rows = ids.map(customerId => ({
+        ...customerOf(customerId), ...totalsOf(customerId),
+        lastActivityAt: stores.orders.wallet.filter(item => item.customerId === customerId).map(item => item.createdAt).sort().at(-1) ?? '',
+      }))
+      const term = search.toLowerCase()
+      const shown = rows
+        .filter(row => !term || [row.name, row.phone, row.email].some(value => value.toLowerCase().includes(term)))
+        .filter(row => show === 'all' || (show === 'waiting' ? row.waitingPaise > 0 : row.balancePaise > 0))
+        .sort((a, b) => Number(b.waitingPaise > 0) - Number(a.waitingPaise > 0) || b.lastActivityAt.localeCompare(a.lastActivityAt))
+      const holding = rows.filter(row => row.balancePaise > 0)
+      return {
+        items: shown.slice((page - 1) * pageSize, page * pageSize), total: shown.length,
+        overview: {
+          heldPaise: holding.reduce((sum, row) => sum + row.balancePaise, 0), customersHolding: holding.length,
+          waitingCount: rows.filter(row => row.waitingPaise > 0).length, waitingPaise: rows.reduce((sum, row) => sum + row.waitingPaise, 0), refundedPaise: rows.reduce((sum, row) => sum + row.refundedPaise, 0),
+        },
+      }
+    },
+    async record(customerId) {
+      if (!stores.customers.get(customerId)) return null
+      return { customer: customerOf(customerId), totals: totalsOf(customerId), topUps: topUpsOf(customerId), refunds: refunds.filter(item => item.customerId === customerId).slice().reverse().map(plainRefund) }
     },
     async markSent(id, input, adminId, now) {
       const refund = refunds.find(item => item.id === id)
       if (!refund) return null
       if (refund.status !== 'requested') throw notWaiting()
-      Object.assign(refund, { status: 'sent', providerReference: input.providerReference, staffNote: input.note, handledBy: adminId, handledAt: now.toISOString() })
+      const given = input.parts.reduce((sum, part) => sum + part.amountPaise, 0)
+      if (given !== refund.amountPaise) throw new AppError(409, 'REFUND_PARTS_MISMATCH', 'The refunds must add up to the request.', { expectedPaise: refund.amountPaise, givenPaise: given })
+      const sources = topUpsOf(refund.customerId)
+      for (const part of input.parts) {
+        const source = sources.find(item => item.paymentId === part.paymentId)
+        const payment = stores.orders.payments.find(item => item.id === part.paymentId)
+        if (!source || !payment || payment.status === 'refunded') throw new AppError(409, 'REFUND_PAYMENT_INVALID', 'One of the payments cannot be refunded.', { paymentId: part.paymentId })
+        if (part.amountPaise > source.leftPaise) throw new AppError(409, 'REFUND_TOO_LARGE', 'That is more than is left on the payment.', { paymentId: part.paymentId, leftPaise: source.leftPaise })
+      }
+      for (const part of input.parts) {
+        parts.push({ requestId: id, paymentId: part.paymentId, merchantOrderId: sources.find(item => item.paymentId === part.paymentId)?.merchantOrderId ?? '', amountPaise: part.amountPaise, providerReference: part.providerReference, createdAt: now.toISOString() })
+        const payment = stores.orders.payments.find(item => item.id === part.paymentId)
+        if (payment) payment.status = refundedOn(payment.id) >= payment.amountPaise ? 'refunded' : 'partially_refunded'
+      }
+      Object.assign(refund, { status: 'sent', providerReference: input.parts.map(part => part.providerReference).join(', ').slice(0, 100), staffNote: input.note, handledBy: adminId, handledAt: now.toISOString() })
       return plainRefund(refund)
     },
     async cancelRefund(id, note, adminId, now) {

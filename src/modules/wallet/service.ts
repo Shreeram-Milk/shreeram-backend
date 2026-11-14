@@ -6,8 +6,8 @@ import type { PaymentStart } from '../payments/service.js'
 import type { PaymentPlan } from '../payments/service.js'
 import type { PaymentPurpose } from '../payments/repository.js'
 import type { RefundRequest, WalletEntry, WalletRepository } from './repository.js'
-import { topUpRoom, walletEnabled, WALLET_MAX_BALANCE_PAISE, WALLET_MIN_TOP_UP_PAISE } from './rules.js'
-import type { AdminRefundListQuery, CancelRefundInput, MarkRefundSentInput, RefundRequestInput, TopUpInput, WalletAdjustmentInput, WalletPageQuery } from './schema.js'
+import { planRefund, topUpRoom, walletEnabled, WALLET_MAX_BALANCE_PAISE, WALLET_MIN_TOP_UP_PAISE } from './rules.js'
+import type { AdminRefundListQuery, CancelRefundInput, MarkRefundSentInput, RefundRequestInput, TopUpInput, WalletAdjustmentInput, WalletCustomerListQuery, WalletPageQuery } from './schema.js'
 
 type Actor = { adminId: string; ip: string | null }
 type Payments = { start(input: { customerId: string; purpose: PaymentPurpose; idempotencyKey: string; plan: () => Promise<PaymentPlan> }): Promise<PaymentStart> }
@@ -71,17 +71,25 @@ export function createWalletService({ repository, payments, audit, notifier = no
 
     listRefunds: (query: AdminRefundListQuery) => repository.adminRefunds(query),
 
+    /**
+     * One request with the customer's whole story (added, spent, refunded before) and a suggested split over their PhonePe
+     * payments, newest first, so staff know exactly what to refund where.
+     */
     async getRefund(id: string) {
       const refund = await repository.adminRefund(id)
       if (!refund) throw new AppError(404, 'REFUND_NOT_FOUND', 'That refund request does not exist.')
-      return refund
+      const record = await repository.record(refund.customerId)
+      const suggested = refund.status === 'requested' ? planRefund(refund.amountPaise, refund.topUps) : []
+      return { ...refund, totals: record?.totals ?? null, suggested }
     },
+
+    listCustomers: (query: WalletCustomerListQuery) => repository.walletCustomers(query),
 
     /** Staff refunded it in PhonePe. The customer is told, once. */
     async markSent(id: string, input: MarkRefundSentInput, actor: Actor): Promise<RefundRequest> {
       const refund = await repository.markSent(id, input, actor.adminId, now())
       if (!refund) throw new AppError(404, 'REFUND_NOT_FOUND', 'That refund request does not exist.')
-      await audit({ adminId: actor.adminId, action: 'wallet_refund_sent', details: { refundId: id, amountPaise: refund.amountPaise, providerReference: input.providerReference }, ip: actor.ip })
+      await audit({ adminId: actor.adminId, action: 'wallet_refund_sent', details: { refundId: id, amountPaise: refund.amountPaise, parts: input.parts }, ip: actor.ip })
       await notifier.notify({ event: 'refund_sent', customerId: refund.customerId, vars: { amount: formatRupees(refund.amountPaise), order: '' }, link: '/wallet', dedupeKey: `wallet-refund:${id}` })
       return refund
     },
@@ -94,9 +102,11 @@ export function createWalletService({ repository, payments, audit, notifier = no
       return refund
     },
 
+    /** A customer's full wallet record for staff, with one page of the activity. */
     async customerWallet(customerId: string, query: WalletPageQuery) {
-      const [wallet, history] = await Promise.all([mine(customerId), repository.entries(customerId, query.page, query.pageSize)])
-      return { wallet, history }
+      const [record, history] = await Promise.all([repository.record(customerId), repository.entries(customerId, query.page, query.pageSize)])
+      if (!record) throw notFound()
+      return { record, history }
     },
 
     async adjust(customerId: string, input: WalletAdjustmentInput, actor: Actor): Promise<MyWallet> {

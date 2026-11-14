@@ -18,3 +18,41 @@ export const topUpRoom = (balancePaise: number): number => Math.max(0, WALLET_MA
 
 /** Only an active prepaid customer can add money or pay with the wallet. Credit customers keep their monthly account. */
 export const walletEnabled = (customer: { customerType: string; status: string }): boolean => customer.customerType !== 'credit' && customer.status === 'active'
+
+/**
+ * One customer's wallet in plain numbers. Always true: balance = added − spent + returned − refunded − waiting + adjusted.
+ * `refunded` is what staff sent back through PhonePe; `waiting` is a request not yet sent (already taken out of the balance).
+ */
+export type WalletTotals = { addedPaise: number; spentPaise: number; returnedPaise: number; refundedPaise: number; waitingPaise: number; adjustedPaise: number; balancePaise: number }
+
+export function walletTotals(
+  entries: ReadonlyArray<{ type: WalletEntryType; direction: WalletDirection; amountPaise: number }>,
+  requests: ReadonlyArray<{ status: RefundStatus; amountPaise: number }>,
+): WalletTotals {
+  const sumOf = (type: WalletEntryType) => entries.filter(entry => entry.type === type).reduce((sum, entry) => sum + entry.amountPaise, 0)
+  const requested = (status: RefundStatus) => requests.filter(request => request.status === status).reduce((sum, request) => sum + request.amountPaise, 0)
+  return {
+    addedPaise: sumOf('top_up'), spentPaise: sumOf('order_payment'), returnedPaise: sumOf('order_return'),
+    refundedPaise: requested('sent'), waitingPaise: requested('requested'),
+    adjustedPaise: balanceOf(entries.filter(entry => entry.type === 'manual_adjustment')), balancePaise: balanceOf(entries),
+  }
+}
+
+/** A PhonePe payment that added money, and how much of it has already gone back. */
+export type RefundSource = { paymentId: string; amountPaise: number; refundedPaise: number }
+export const leftToRefund = (source: RefundSource): number => Math.max(0, source.amountPaise - source.refundedPaise)
+
+/**
+ * Which PhonePe payments to refund a request from: the newest first, each up to what is left on it (PhonePe never refunds more
+ * than a payment). Staff can change it; this is only the suggestion. Short when the payments cannot cover the amount.
+ */
+export function planRefund(amountPaise: number, sourcesNewestFirst: ReadonlyArray<RefundSource>): Array<{ paymentId: string; amountPaise: number }> {
+  const plan: Array<{ paymentId: string; amountPaise: number }> = []
+  let remaining = amountPaise
+  for (const source of sourcesNewestFirst) {
+    if (remaining <= 0) break
+    const take = Math.min(remaining, leftToRefund(source))
+    if (take > 0) { plan.push({ paymentId: source.paymentId, amountPaise: take }); remaining -= take }
+  }
+  return plan
+}

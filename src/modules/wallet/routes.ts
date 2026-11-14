@@ -6,8 +6,8 @@ import type { Customer } from '../customer-auth/repository.js'
 import { requireCustomer } from '../customer-auth/routes.js'
 import type { CustomerAuthService } from '../customer-auth/service.js'
 import {
-  adminRefundListSchema, cancelRefundSchema, markRefundSentSchema, refundIdParamsSchema, refundRequestSchema, topUpSchema, walletAdjustmentSchema, walletCustomerParamsSchema, walletPageSchema,
-  type AdminRefundListQuery, type CancelRefundInput, type MarkRefundSentInput, type RefundRequestInput, type TopUpInput, type WalletAdjustmentInput, type WalletPageQuery,
+  adminRefundListSchema, cancelRefundSchema, markRefundSentSchema, refundIdParamsSchema, refundRequestSchema, topUpSchema, walletAdjustmentSchema, walletCustomerListSchema, walletCustomerParamsSchema, walletPageSchema,
+  type AdminRefundListQuery, type CancelRefundInput, type MarkRefundSentInput, type RefundRequestInput, type TopUpInput, type WalletAdjustmentInput, type WalletCustomerListQuery, type WalletPageQuery,
 } from './schema.js'
 import type { WalletService } from './service.js'
 
@@ -51,6 +51,9 @@ export function createAdminWalletRouter({ auth, wallet, allowedOrigins }: { auth
   })
   router.post('/refund-requests/:id/cancel', validate('params', refundIdParamsSchema), validate('body', cancelRefundSchema), async (request: Request, response: Response) => {
     response.json({ request: await wallet.cancelRefund(idOf(request), request.body as CancelRefundInput, actorOf(request)) })
+  })
+  router.get('/customers', validate('query', walletCustomerListSchema), async (request: Request, response: Response) => {
+    response.json(await wallet.listCustomers(request.query as unknown as WalletCustomerListQuery))
   })
   router.get('/customers/:customerId', validate('params', walletCustomerParamsSchema), validate('query', walletPageSchema), async (request: Request, response: Response) => {
     response.json(await wallet.customerWallet(customerOf(request), request.query as unknown as WalletPageQuery))

@@ -110,10 +110,15 @@ describe('refunds', () => {
     const queue = await adminGet(api, cookie, '/admin/wallet/refund-requests?status=requested')
     expect(queue.body.items).toHaveLength(1)
     const detail = await adminGet(api, cookie, `/admin/wallet/refund-requests/${asked.body.request.id}`)
-    expect(detail.body.request.topUps).toEqual([expect.objectContaining({ amountPaise: 50_000 })])
-    expect((await adminSend(api, cookie, 'post', `/admin/wallet/refund-requests/${asked.body.request.id}/sent`, { providerReference: '' })).status).toBe(400)
-    const sent = await adminSend(api, cookie, 'post', `/admin/wallet/refund-requests/${asked.body.request.id}/sent`, { providerReference: 'PPRF123' })
-    expect(sent.body.request).toMatchObject({ status: 'sent', providerReference: 'PPRF123' })
+    expect(detail.body.request.topUps).toEqual([expect.objectContaining({ amountPaise: 50_000, refundedPaise: 0, leftPaise: 50_000 })])
+    const paymentId = detail.body.request.topUps[0].paymentId as string
+    expect(detail.body.request.suggested).toEqual([{ paymentId, amountPaise: 50_000 }])
+    expect(detail.body.request.totals).toMatchObject({ addedPaise: 50_000, waitingPaise: 50_000, balancePaise: 0 })
+    const url = `/admin/wallet/refund-requests/${asked.body.request.id}/sent`
+    expect((await adminSend(api, cookie, 'post', url, { parts: [{ paymentId, amountPaise: 50_000, providerReference: '' }] })).status).toBe(400)
+    expect((await adminSend(api, cookie, 'post', url, { parts: [{ paymentId, amountPaise: 40_000, providerReference: 'PPRF123' }] })).body.error.code).toBe('REFUND_PARTS_MISMATCH')
+    const sent = await adminSend(api, cookie, 'post', url, { parts: [{ paymentId, amountPaise: 50_000, providerReference: 'PPRF123' }] })
+    expect(sent.body.request).toMatchObject({ status: 'sent', providerReference: 'PPRF123', parts: [expect.objectContaining({ paymentId, amountPaise: 50_000, providerReference: 'PPRF123' })] })
     expect((await adminSend(api, cookie, 'post', `/admin/wallet/refund-requests/${asked.body.request.id}/cancel`, { note: 'Too late' })).body.error.code).toBe('REFUND_NOT_OPEN')
     expect((await wallet(api, token)).body.wallet).toMatchObject({ balancePaise: 0, openRefund: null })
   })
@@ -125,6 +130,41 @@ describe('refunds', () => {
     const cookie = await adminSignedIn(api)
     expect((await adminSend(api, cookie, 'post', `/admin/wallet/refund-requests/${id}/cancel`, { note: 'Customer asked to keep it' })).body.request.status).toBe('cancelled')
     expect((await wallet(api, token)).body.wallet).toMatchObject({ balancePaise: 50_000, openRefund: null })
+  })
+
+  it('keeps a full record: what came in, what went out, and which payment each refund went back to', async () => {
+    const api = await createTestApi()
+    const s = await shop(api)
+    const { token, addressId, customerId } = await funded(api)
+    const second = await topUp(api, token, 50_000, 'top-second')
+    await confirm(api, token, second.body.payment.merchantOrderId)
+    expect((await placeWithWallet(api, token, milkOrder(s, addressId, 'wallet-order-r'))).status).toBe(201)
+    const askedFirst = (await askRefund(api, token, 'refund-first')).body.request
+    expect(askedFirst.amountPaise).toBe(93_000)
+
+    const cookie = await adminSignedIn(api)
+    const detail = (await adminGet(api, cookie, `/admin/wallet/refund-requests/${askedFirst.id}`)).body.request
+    // Newest payment first, the rest from the older one: PhonePe never refunds more than a payment.
+    expect(detail.suggested.map((part: { amountPaise: number }) => part.amountPaise)).toEqual([50_000, 43_000])
+    const [newest, oldest] = detail.topUps as Array<{ paymentId: string }>
+    const url = `/admin/wallet/refund-requests/${askedFirst.id}/sent`
+    expect((await adminSend(api, cookie, 'post', url, { parts: [{ paymentId: newest?.paymentId, amountPaise: 93_000, providerReference: 'R1' }] })).body.error.code).toBe('REFUND_TOO_LARGE')
+    expect((await adminSend(api, cookie, 'post', url, { parts: [{ paymentId: newest?.paymentId, amountPaise: 50_000, providerReference: 'R1' }, { paymentId: newest?.paymentId, amountPaise: 43_000, providerReference: 'R2' }] })).status).toBe(400)
+    const sent = await adminSend(api, cookie, 'post', url, { parts: [{ paymentId: newest?.paymentId, amountPaise: 50_000, providerReference: 'R1' }, { paymentId: oldest?.paymentId, amountPaise: 43_000, providerReference: 'R2' }], note: 'Done' })
+    expect(sent.body.request).toMatchObject({ status: 'sent', providerReference: 'R1, R2' })
+
+    const record = (await adminGet(api, cookie, `/admin/wallet/customers/${customerId}`)).body.record
+    expect(record.totals).toEqual({ addedPaise: 100_000, spentPaise: 7000, returnedPaise: 0, refundedPaise: 93_000, waitingPaise: 0, adjustedPaise: 0, balancePaise: 0 })
+    expect(record.topUps.map((item: { leftPaise: number }) => item.leftPaise)).toEqual([0, 7000])
+    expect(record.refunds).toEqual([expect.objectContaining({ amountPaise: 93_000, status: 'sent', parts: [expect.objectContaining({ amountPaise: 50_000 }), expect.objectContaining({ amountPaise: 43_000 })] })])
+
+    const list = (await adminGet(api, cookie, '/admin/wallet/customers')).body
+    expect(list.items).toEqual([expect.objectContaining({ customerId, addedPaise: 100_000, refundedPaise: 93_000, balancePaise: 0 })])
+    expect(list.overview).toMatchObject({ heldPaise: 0, waitingCount: 0, refundedPaise: 93_000 })
+    expect((await adminGet(api, cookie, '/admin/wallet/customers?show=waiting')).body.total).toBe(0)
+
+    const mine = (await request(api.app).get('/customer/wallet/refund-requests').set(bearer(token))).body.requests
+    expect(mine).toEqual([expect.objectContaining({ amountPaise: 93_000, status: 'sent', completedAt: null })])
   })
 
   it('refuses a refund of an empty wallet', async () => {
