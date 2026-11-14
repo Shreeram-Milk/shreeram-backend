@@ -79,8 +79,11 @@ export function createWalletService({ repository, payments, audit, notifier = no
       const refund = await repository.adminRefund(id)
       if (!refund) throw new AppError(404, 'REFUND_NOT_FOUND', 'That refund request does not exist.')
       const record = await repository.record(refund.customerId)
-      const suggested = refund.status === 'requested' ? planRefund(refund.amountPaise, refund.topUps) : []
-      return { ...refund, totals: record?.totals ?? null, suggested }
+      // Refunds recorded before each one was tied to a payment: we cannot know which payments they came from, so the
+      // "can still refund" figures may be too high and no split is suggested. Staff check in PhonePe instead.
+      const untrackedPaise = (record?.refunds ?? []).filter(item => item.status === 'sent' && item.parts.length === 0).reduce((sum, item) => sum + item.amountPaise, 0)
+      const suggested = refund.status === 'requested' && untrackedPaise === 0 ? planRefund(refund.amountPaise, refund.topUps) : []
+      return { ...refund, totals: record?.totals ?? null, suggested, untrackedPaise }
     },
 
     listCustomers: (query: WalletCustomerListQuery) => repository.walletCustomers(query),

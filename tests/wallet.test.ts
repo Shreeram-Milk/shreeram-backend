@@ -146,6 +146,7 @@ describe('refunds', () => {
     const detail = (await adminGet(api, cookie, `/admin/wallet/refund-requests/${askedFirst.id}`)).body.request
     // Newest payment first, the rest from the older one: PhonePe never refunds more than a payment.
     expect(detail.suggested.map((part: { amountPaise: number }) => part.amountPaise)).toEqual([50_000, 43_000])
+    expect(detail.untrackedPaise).toBe(0)
     const [newest, oldest] = detail.topUps as Array<{ paymentId: string }>
     const url = `/admin/wallet/refund-requests/${askedFirst.id}/sent`
     expect((await adminSend(api, cookie, 'post', url, { parts: [{ paymentId: newest?.paymentId, amountPaise: 93_000, providerReference: 'R1' }] })).body.error.code).toBe('REFUND_TOO_LARGE')
