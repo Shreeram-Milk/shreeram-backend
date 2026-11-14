@@ -23,6 +23,19 @@ async function subscribableShop(api: TestApi) {
   return { ...s, evening, ruleId: rule.id as string, trialId: trial }
 }
 
+describe('subscription rules without ready-made lengths', () => {
+  it('saves a rule with no quick lengths; customers then choose the last day', async () => {
+    const api = await createTestApi()
+    const s = await shop(api)
+    const created = await adminSend(api, s.cookie, 'post', '/admin/subscription-rules', { name: 'Any length', systemType: 'daily', minDays: 5, maxDays: 180 })
+    expect(created.status).toBe(201)
+    expect(created.body.subscriptionRule).toMatchObject({ lengthOptions: [], minDays: 5, maxDays: 180 })
+    const cleared = await adminSend(api, s.cookie, 'put', `/admin/subscription-rules/${created.body.subscriptionRule.id}`, { name: 'Any length', systemType: 'daily', lengthOptions: [], minDays: 5, maxDays: 180 })
+    expect(cleared.status).toBe(200)
+    expect(cleared.body.subscriptionRule.lengthOptions).toEqual([])
+  })
+})
+
 async function creditCustomer(api: TestApi, limitPaise: number) {
   const customer = await customerSignUp(api, '9824612345')
   const stored = api.customerAuth.customers.get(customer.customerId)
