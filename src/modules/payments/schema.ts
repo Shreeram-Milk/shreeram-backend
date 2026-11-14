@@ -14,7 +14,7 @@ export const PAYMENT_STATUSES = ['pending', 'paid', 'failed', 'refunded', 'parti
 export const adminPaymentListQuerySchema = z.object({
   search: z.string().trim().max(100).default(''),
   status: z.enum(PAYMENT_STATUSES).optional(),
-  purpose: z.enum(['order', 'credit_settlement', 'subscription']).optional(),
+  purpose: z.enum(['order', 'credit_settlement', 'subscription', 'wallet_topup']).optional(),
   page: z.coerce.number().int().min(1).max(10_000).default(1),
   pageSize: z.coerce.number().int().min(1).max(100).default(20),
 })

@@ -6,9 +6,11 @@ import { likePattern } from '../master-data/shared.js'
 import type { PaymentMethodDetails } from '../../integrations/payments/gateway.js'
 import { insertOrders, type NewOrder } from '../orders/repository.js'
 import { insertSubscription, type SubscriptionDraft } from '../subscriptions/repository.js'
+import { addWalletEntry, walletBalance } from '../wallet/ledger.js'
+import { topUpRoom, walletEnabled } from '../wallet/rules.js'
 import type { AdminPaymentListQuery } from './schema.js'
 
-export type PaymentPurpose = 'order' | 'credit_settlement' | 'subscription'
+export type PaymentPurpose = 'order' | 'credit_settlement' | 'subscription' | 'wallet_topup'
 export type PaymentStatus = 'pending' | 'paid' | 'failed' | 'refunded' | 'partially_refunded'
 export type Fulfilment = 'none' | 'fulfilled' | 'refund_due'
 export type ActivityKind = 'started' | 'provider_order_created' | 'provider_error' | 'status_checked' | 'webhook_received' | 'paid' | 'failed' | 'fulfilled' | 'refund_due'
@@ -18,7 +20,9 @@ export type OrderSnapshot = { kind: 'order'; version: 1; orderKeyPrefix: string;
 export type RequestSnapshot = { kind: 'payment_request'; version: 1 }
 /** A subscription or trial paid upfront: written exactly as drafted once PhonePe confirms. */
 export type SubscriptionSnapshot = { kind: 'subscription'; version: 1; draft: SubscriptionDraft }
-export type PaymentSnapshot = OrderSnapshot | RequestSnapshot | SubscriptionSnapshot
+/** Money added to the wallet: nothing to freeze, the amount is the payment's own. */
+export type WalletTopUpSnapshot = { kind: 'wallet_topup'; version: 1 }
+export type PaymentSnapshot = OrderSnapshot | RequestSnapshot | SubscriptionSnapshot | WalletTopUpSnapshot
 
 export type OnlinePayment = {
   id: string; customerId: string; purpose: PaymentPurpose; amountPaise: number; status: PaymentStatus; fulfilment: Fulfilment
@@ -223,6 +227,31 @@ async function settleRequest(client: PoolClient, payment: Row, now: Date): Promi
   }
 }
 
+/**
+ * Money added to the wallet. Under the same customer lock as every other money change: only an active prepaid customer's wallet
+ * grows, and only up to its limit. Anything else (a credit customer, a blocked account, more than the limit allows by now) is
+ * refunded, never added. The line is unique per payment, so this can run any number of times.
+ */
+async function settleWalletTopUp(client: PoolClient, payment: Row): Promise<void> {
+  const amount = Number(payment.amount_paise)
+  const { rows } = await client.query<Row>('select status, customer_type from customers where id = $1 for update', [payment.customer_id])
+  const customer = rows[0]
+  if (!customer || !walletEnabled({ customerType: String(customer.customer_type), status: String(customer.status) })) {
+    await refundDue(client, payment, amount, 'Paid online to add to the wallet, but this account cannot use a wallet. Refund the payment in PhonePe, then record it.', 'WALLET_NOT_AVAILABLE', true)
+    return
+  }
+  const credited = Math.min(amount, topUpRoom(await walletBalance(client, String(payment.customer_id))))
+  if (credited > 0) {
+    await addWalletEntry(client, { customerId: String(payment.customer_id), type: 'top_up', direction: 'credit', amountPaise: credited, paymentId: String(payment.id), description: 'Added with PhonePe' })
+  }
+  const excess = amount - credited
+  if (excess > 0) await refundDue(client, payment, excess, 'Paid online more than the wallet can hold. Refund the difference in PhonePe, then record it.', 'WALLET_LIMIT', credited === 0)
+  if (credited > 0) {
+    await client.query("update payments set fulfilment = 'fulfilled', updated_at = now() where id = $1", [payment.id])
+    await activity(client, String(payment.id), 'fulfilled', { walletCreditedPaise: credited })
+  }
+}
+
 export function createPaymentRepository(database: Database): PaymentRepository {
   const findOne = async (where: string, values: unknown[]): Promise<OnlinePayment | null> => {
     const { rows } = await database.query<Row>(`select ${PAYMENT_COLUMNS} from payments p where ${where}`, values)
@@ -296,6 +325,8 @@ export function createPaymentRepository(database: Database): PaymentRepository {
         await settleOrder(client, payment, now)
       } else if (payment.purpose === 'subscription') {
         await settleSubscription(client, payment)
+      } else if (payment.purpose === 'wallet_topup') {
+        await settleWalletTopUp(client, payment)
       } else {
         await settleRequest(client, payment, now)
       }

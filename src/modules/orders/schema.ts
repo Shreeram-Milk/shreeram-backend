@@ -33,6 +33,8 @@ export const checkoutInputSchema = z.object({
   offerCode: z.string().trim().max(40).optional(),
   /** The total the customer was shown. If prices changed since, the order is refused (PRICE_CHANGED) so nobody pays a price they did not see. */
   expectedTotalPaise: z.number().int().min(0).optional(),
+  /** How a prepaid customer pays: PhonePe (the default, also for older app versions that do not send this) or their wallet. Credit customers always use credit. */
+  payWith: z.enum(['online', 'wallet']).optional(),
 })
 export type CheckoutInput = z.infer<typeof checkoutInputSchema>
 

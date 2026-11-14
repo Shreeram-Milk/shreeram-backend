@@ -84,6 +84,10 @@ import { createOfferService } from '../src/modules/offers/service.js'
 import { createFakeOfferRepository, type FakeRedemption } from './fake-offers.js'
 import { createAdminAdjustmentRouter } from '../src/modules/prepaid-adjustments/routes.js'
 import { createAdjustmentService } from '../src/modules/prepaid-adjustments/service.js'
+import type { RefundRequest, WalletRepository } from '../src/modules/wallet/repository.js'
+import { createAdminWalletRouter, createCustomerWalletRouter } from '../src/modules/wallet/routes.js'
+import { topUpRoom, walletEnabled, type RefundStatus, type WalletDirection, type WalletEntryType } from '../src/modules/wallet/rules.js'
+import { createWalletService } from '../src/modules/wallet/service.js'
 import type { Adjustment, AdjustmentRepository } from '../src/modules/prepaid-adjustments/repository.js'
 import { createAdminCreditRouter, createCustomerCreditRouter } from '../src/modules/credit/routes.js'
 import { createCreditService } from '../src/modules/credit/service.js'
@@ -712,6 +716,10 @@ export function createFakeBannerRepository(media: { rows: MediaAsset[] } = { row
 /** A whole API wired to in-memory fakes, with a captured login code and audit trail. */
 
 type StoredOrder = AdminOrderView & { idempotencyKey: string; paymentId: string | null; subscriptionLineId: string | null }
+export type FakeWalletEntry = {
+  id: string; customerId: string; type: WalletEntryType; direction: WalletDirection; amountPaise: number
+  paymentId: string | null; orderId: string | null; refundRequestId: string | null; description: string; createdBy: string | null; createdAt: string
+}
 /** Mirrors the real list order: orders still to deliver first (nearest delivery on top), then the rest with the latest delivery first. */
 const comingFirst = (a: StoredOrder, b: StoredOrder): number => {
   const coming = (order: StoredOrder) => order.status === 'placed' || order.status === 'out_for_delivery'
@@ -738,6 +746,16 @@ export function createFakeOrderRepository(stores: { products: { rows: Product[] 
   const creditLimits = new Map<string, number>()
   /** Subscription skips (the subscription fake reads and writes the same list). */
   const skips: FakeSkip[] = []
+  /** The wallet ledger (the wallet and payment fakes read and write the same list). Like the database: one line per payment, order or refund, never below zero. */
+  const wallet: FakeWalletEntry[] = []
+  const walletBalance = (customerId: string) => wallet.filter(row => row.customerId === customerId).reduce((sum, row) => sum + (row.direction === 'credit' ? row.amountPaise : -row.amountPaise), 0)
+  const addWallet = (row: Omit<FakeWalletEntry, 'id' | 'createdAt'>, now: Date): boolean => {
+    const same = (key: 'paymentId' | 'orderId' | 'refundRequestId') => wallet.some(item => item.type === row.type && item[key] !== null && item[key] === row[key])
+    if ((row.type === 'top_up' && same('paymentId')) || ((row.type === 'order_payment' || row.type === 'order_return') && same('orderId')) || ((row.type === 'refund_hold' || row.type === 'refund_release') && same('refundRequestId'))) return false
+    if (row.direction === 'debit' && walletBalance(row.customerId) < row.amountPaise) throw Object.assign(new Error('WALLET_BALANCE_NEGATIVE'), { code: '23514' })
+    wallet.push({ ...row, id: randomUUID(), createdAt: now.toISOString() })
+    return true
+  }
   let counter = 1000
   const owed = (customerId: string) => ledger.filter(row => row.customerId === customerId).reduce((sum, row) => sum + (row.direction === 'debit' ? row.amountPaise : -row.amountPaise), 0)
   const adminView = (order: StoredOrder): AdminOrderView => ({ ...strip(order), customerId: order.customerId, customerName: order.customerName, customerPhone: order.customerPhone })
@@ -754,6 +772,12 @@ export function createFakeOrderRepository(stores: { products: { rows: Product[] 
       if (customer.customerType !== 'credit') throw new AppError(409, 'CREDIT_NOT_ENABLED', 'This account does not have credit.')
       const limit = creditLimits.get(customerId) ?? 0
       if (!withinCreditLimit(limit, owed(customerId), creditTotal)) throw new AppError(409, 'CREDIT_LIMIT_EXCEEDED', 'This order is above your credit limit.', { limitPaise: limit, owedPaise: owed(customerId), neededPaise: creditTotal })
+    }
+    const walletTotal = newOrders.filter(order => order.payment.method === 'wallet').reduce((sum, order) => sum + order.totalPaise, 0)
+    if (walletTotal > 0) {
+      if (!walletEnabled(customer)) throw new AppError(409, 'WALLET_NOT_AVAILABLE', 'The wallet is not available on this account.')
+      const balance = walletBalance(customerId)
+      if (balance < walletTotal) throw new AppError(409, 'WALLET_BALANCE_LOW', 'Your wallet does not have enough money for this order.', { balancePaise: balance, neededPaise: walletTotal })
     }
     if (newOrders.some(order => orders.some(existing => existing.customerId === customerId && existing.idempotencyKey === order.idempotencyKey))) throw Object.assign(new Error('duplicate key'), { code: '23505' })
     const offerRef = newOrders.find(order => order.offer)?.offer
@@ -772,7 +796,7 @@ export function createFakeOrderRepository(stores: { products: { rows: Product[] 
       const stored: StoredOrder = {
         id, orderNumber: `SRM-${++counter}`, status: 'placed', deliveryMethod: order.deliveryMethod, deliveryDate: order.deliveryDate, slot: order.slot, orderBy: order.orderBy, cancelBy: order.cancelBy,
         recipientName: order.recipientName, recipientPhone: order.recipientPhone, addressLine1: order.addressLine1, addressLine2: order.addressLine2, landmark: order.landmark, city: order.city, pinCode: order.pinCode, doorstepNote: order.doorstepNote,
-        subtotalPaise: order.subtotalPaise, discountPaise: order.discountPaise ?? 0, totalPaise: order.totalPaise, offerTitle: order.offer?.title ?? order.offerLabel?.title ?? '', offerTitleGu: order.offer?.titleGu ?? order.offerLabel?.titleGu ?? '', paymentMethod: order.payment.method, paymentStatus: order.payment.method === 'online' ? 'paid' : 'unpaid',
+        subtotalPaise: order.subtotalPaise, discountPaise: order.discountPaise ?? 0, totalPaise: order.totalPaise, offerTitle: order.offer?.title ?? order.offerLabel?.title ?? '', offerTitleGu: order.offer?.titleGu ?? order.offerLabel?.titleGu ?? '', paymentMethod: order.payment.method, paymentStatus: order.payment.method === 'credit' ? 'unpaid' : 'paid',
         placedAt: now.toISOString(), cancelledAt: null, cancelReason: '',
         subscriptionId: order.subscription?.id ?? null, subscriptionLineId: order.subscription?.lineId ?? null, courierName: '', trackingUrl: '', moneyReturnedAt: null,
         items: order.items.map(item => ({ id: randomUUID(), productId: item.productId, variantId: item.variantId, productName: item.productName, productNameGu: item.productNameGu, variantName: item.variantName, purchaseMethod: item.purchaseMethod ?? 'buy_once', unitPricePaise: item.unitPricePaise, quantity: item.quantity, lineTotalPaise: item.lineTotalPaise, isGift: item.isGift ?? false })),
@@ -782,6 +806,7 @@ export function createFakeOrderRepository(stores: { products: { rows: Product[] 
       placed.push(stored)
       if (order.offer && stores.offers) stores.offers.redemptions.push({ offerId: order.offer.id, customerId, checkoutKey: order.offer.checkoutKey, orderId: id, subscriptionId: null, discountPaise: order.discountPaise ?? 0 })
       history.push({ orderId: id, from: null, to: 'placed', byAdmin: null })
+      if (order.payment.method === 'wallet') addWallet({ customerId, type: 'order_payment', direction: 'debit', amountPaise: order.totalPaise, paymentId: null, orderId: id, refundRequestId: null, description: 'Order paid from wallet', createdBy: null }, now)
       if (order.payment.method === 'credit') ledger.push({ id: randomUUID(), customerId, type: 'order_charge', direction: 'debit', amountPaise: order.totalPaise, orderId: id, paymentId: null, description: 'Order placed', createdAt: now.toISOString() })
     }
     return placed.sort((a, b) => a.idempotencyKey.localeCompare(b.idempotencyKey)).map(strip)
@@ -863,7 +888,10 @@ export function createFakeOrderRepository(stores: { products: { rows: Product[] 
       }
       if (releasesMoney(to)) {
         if (order.paymentMethod === 'credit') ledger.push({ id: randomUUID(), customerId: order.customerId, type: 'order_refund', direction: 'credit', amountPaise: order.totalPaise, orderId, paymentId: null, description: `Order ${order.orderNumber} ${to}`, createdAt: now.toISOString() })
-        else if (order.paymentStatus === 'paid' && !order.subscriptionId && !adjustments.some(item => item.dedupeKey === `order-release:${orderId}`)) adjustments.push({ id: randomUUID(), customerId: order.customerId, orderId, type: 'refund_pending', status: 'pending', amountPaise: order.totalPaise, reason: `Order ${order.orderNumber} ${to}: refund the payment in PhonePe, then record it.`, dedupeKey: `order-release:${orderId}`, createdAt: now.toISOString() })
+        else if (order.paymentMethod === 'wallet' && order.paymentStatus === 'paid' && !order.subscriptionId) {
+          addWallet({ customerId: order.customerId, type: 'order_return', direction: 'credit', amountPaise: order.totalPaise, paymentId: null, orderId, refundRequestId: null, description: `Order ${order.orderNumber} ${to}`, createdBy: adminId }, now)
+          order.paymentStatus = 'refunded'
+        } else if (order.paymentStatus === 'paid' && !order.subscriptionId && !adjustments.some(item => item.dedupeKey === `order-release:${orderId}`)) adjustments.push({ id: randomUUID(), customerId: order.customerId, orderId, type: 'refund_pending', status: 'pending', amountPaise: order.totalPaise, reason: `Order ${order.orderNumber} ${to}: refund the payment in PhonePe, then record it.`, dedupeKey: `order-release:${orderId}`, createdAt: now.toISOString() })
       }
       return strip(order)
     },
@@ -873,7 +901,10 @@ export function createFakeOrderRepository(stores: { products: { rows: Product[] 
       if (!canReturnMoney(order.status)) throw new AppError(409, 'RETURN_NOT_ALLOWED', 'Money can be returned only for a missed or delivered order.')
       if (order.moneyReturnedAt) throw new AppError(409, 'MONEY_ALREADY_RETURNED', 'The money for this order was already returned.')
       if (order.paymentMethod === 'credit') ledger.push({ id: randomUUID(), customerId: order.customerId, type: 'order_refund', direction: 'credit', amountPaise: order.totalPaise, orderId, paymentId: null, description: `Order ${order.orderNumber}: credited by staff (${reason})`, createdAt: now.toISOString() })
-      else if (order.paymentStatus === 'paid' || order.paymentStatus === 'partially_refunded') {
+      else if (order.paymentMethod === 'wallet' && order.paymentStatus === 'paid') {
+        addWallet({ customerId: order.customerId, type: 'order_return', direction: 'credit', amountPaise: order.totalPaise, paymentId: null, orderId, refundRequestId: null, description: `Order ${order.orderNumber}: ${reason}`, createdBy: adminId }, now)
+        order.paymentStatus = 'refunded'
+      } else if (order.paymentStatus === 'paid' || order.paymentStatus === 'partially_refunded') {
         if (!adjustments.some(item => item.dedupeKey === `order-return:${orderId}`)) adjustments.push({ id: randomUUID(), customerId: order.customerId, orderId, paymentId: order.paymentId, type: 'refund_pending', status: 'pending', amountPaise: order.totalPaise, reason: `Order ${order.orderNumber}: ${reason}. Refund it in PhonePe, then record it.`, dedupeKey: `order-return:${orderId}`, createdAt: now.toISOString() })
       } else throw new AppError(409, 'NOTHING_TO_RETURN', 'This order has no payment to return.')
       order.moneyReturnedAt = now.toISOString()
@@ -889,7 +920,7 @@ export function createFakeOrderRepository(stores: { products: { rows: Product[] 
       return strip(order)
     },
   }
-  return { repository, insertOrders, orders, ledger, payments, adjustments, history, creditLimits, skips }
+  return { repository, insertOrders, orders, ledger, payments, adjustments, history, creditLimits, skips, wallet, walletBalance, addWallet }
 }
 
 
@@ -1102,6 +1133,16 @@ export function createFakePaymentRepository(stores: { orders: ReturnType<typeof 
             refundDue(row, row.amountPaise, code, true, now)
           }
         }
+      } else if (row.purpose === 'wallet_topup') {
+        const customer = stores.customers.get(row.customerId)
+        if (!customer || !walletEnabled(customer)) refundDue(row, row.amountPaise, 'WALLET_NOT_AVAILABLE', true, now)
+        else {
+          const credited = Math.min(row.amountPaise, topUpRoom(stores.orders.walletBalance(row.customerId)))
+          if (credited > 0) stores.orders.addWallet({ customerId: row.customerId, type: 'top_up', direction: 'credit', amountPaise: credited, paymentId: row.id, orderId: null, refundRequestId: null, description: 'Added with PhonePe', createdBy: null }, now)
+          const excess = row.amountPaise - credited
+          if (excess > 0) refundDue(row, excess, 'WALLET_LIMIT', credited === 0, now)
+          if (credited > 0) { row.fulfilment = 'fulfilled'; act(row.id, 'fulfilled', { walletCreditedPaise: credited }) }
+        }
       } else {
         const credited = Math.min(row.amountPaise, Math.max(0, owed(row.customerId)))
         if (credited > 0) stores.orders.ledger.push({ id: randomUUID(), customerId: row.customerId, type: 'payment_received', direction: 'credit', amountPaise: credited, orderId: null, paymentId: row.id, description: 'Paid online (PhonePe)', createdAt: now.toISOString() })
@@ -1153,6 +1194,87 @@ export function createFakePaymentRepository(stores: { orders: ReturnType<typeof 
  * PhonePe for tests. By default a payment completes at once for the amount asked (like the development test gateway); a test can
  * hold it pending, fail it, report a different amount, or make PhonePe unreachable.
  */
+type StoredRefund = RefundRequest & { idempotencyKey: string; handledBy: string | null }
+const plainRefund = ({ idempotencyKey: _key, handledBy: _by, ...refund }: StoredRefund): RefundRequest => refund
+
+export function createFakeWalletRepository(stores: { orders: ReturnType<typeof createFakeOrderRepository>; customers: Map<string, Customer>; now: () => Date }) {
+  const refunds: StoredRefund[] = []
+  const adminRow = (refund: StoredRefund) => {
+    const customer = stores.customers.get(refund.customerId)
+    return { ...plainRefund(refund), customerName: customer?.name ?? '', customerPhone: customer?.phone ?? '', customerEmail: customer?.email ?? '' }
+  }
+  const mustExist = (customerId: string) => { if (!stores.customers.get(customerId)) throw new AppError(404, 'CUSTOMER_NOT_FOUND', 'That customer does not exist.') }
+  const notWaiting = () => new AppError(409, 'REFUND_NOT_OPEN', 'This refund request was already handled.')
+  const repository: WalletRepository = {
+    async summary(customerId) {
+      const customer = stores.customers.get(customerId)
+      if (!customer) return null
+      const open = refunds.find(item => item.customerId === customerId && item.status === 'requested')
+      return { customerType: customer.customerType, status: customer.status, balancePaise: stores.orders.walletBalance(customerId), openRefund: open ? plainRefund(open) : null }
+    },
+    async entries(customerId, page, pageSize) {
+      const all = stores.orders.wallet.filter(item => item.customerId === customerId).slice().reverse()
+      return {
+        items: all.slice((page - 1) * pageSize, page * pageSize).map(item => ({
+          id: item.id, type: item.type, direction: item.direction, amountPaise: item.amountPaise, description: item.description,
+          orderNumber: item.orderId ? stores.orders.orders.find(order => order.id === item.orderId)?.orderNumber ?? null : null, createdAt: item.createdAt,
+        })),
+        total: all.length,
+      }
+    },
+    async refunds(customerId) { return refunds.filter(item => item.customerId === customerId).slice().reverse().slice(0, 10).map(plainRefund) },
+    async createRefund(customerId, input) {
+      const earlier = refunds.find(item => item.customerId === customerId && item.idempotencyKey === input.idempotencyKey)
+      if (earlier) return plainRefund(earlier)
+      mustExist(customerId)
+      if (refunds.some(item => item.customerId === customerId && item.status === 'requested')) throw new AppError(409, 'REFUND_ALREADY_REQUESTED', 'A refund is already on its way.')
+      const balance = stores.orders.walletBalance(customerId)
+      if (balance <= 0) throw new AppError(409, 'WALLET_EMPTY', 'There is no money in your wallet to refund.')
+      const row: StoredRefund = {
+        id: randomUUID(), customerId, amountPaise: balance, status: 'requested' as RefundStatus, customerNote: input.note, providerReference: '', staffNote: '',
+        requestedAt: stores.now().toISOString(), handledAt: null, idempotencyKey: input.idempotencyKey, handledBy: null,
+      }
+      refunds.push(row)
+      stores.orders.addWallet({ customerId, type: 'refund_hold', direction: 'debit', amountPaise: balance, paymentId: null, orderId: null, refundRequestId: row.id, description: 'Refund requested', createdBy: null }, stores.now())
+      return plainRefund(row)
+    },
+    async adminRefunds({ status, page, pageSize }) {
+      const all = refunds.filter(item => !status || item.status === status).slice().reverse()
+      return { items: all.slice((page - 1) * pageSize, page * pageSize).map(adminRow), total: all.length }
+    },
+    async adminRefund(id) {
+      const refund = refunds.find(item => item.id === id)
+      if (!refund) return null
+      const topUps = stores.orders.payments.filter(payment => payment.customerId === refund.customerId && payment.purpose === 'wallet_topup' && payment.status === 'paid')
+        .map(payment => ({ paymentId: payment.id, merchantOrderId: payment.merchantOrderId, transactionId: payment.providerTransactionId, amountPaise: payment.amountPaise, paidAt: payment.paidAt }))
+      return { ...adminRow(refund), topUps }
+    },
+    async markSent(id, input, adminId, now) {
+      const refund = refunds.find(item => item.id === id)
+      if (!refund) return null
+      if (refund.status !== 'requested') throw notWaiting()
+      Object.assign(refund, { status: 'sent', providerReference: input.providerReference, staffNote: input.note, handledBy: adminId, handledAt: now.toISOString() })
+      return plainRefund(refund)
+    },
+    async cancelRefund(id, note, adminId, now) {
+      const refund = refunds.find(item => item.id === id)
+      if (!refund) return null
+      if (refund.status !== 'requested') throw notWaiting()
+      Object.assign(refund, { status: 'cancelled', staffNote: note, handledBy: adminId, handledAt: now.toISOString() })
+      stores.orders.addWallet({ customerId: refund.customerId, type: 'refund_release', direction: 'credit', amountPaise: refund.amountPaise, paymentId: null, orderId: null, refundRequestId: id, description: 'Refund cancelled, money back in the wallet', createdBy: adminId }, now)
+      return plainRefund(refund)
+    },
+    async adjust(customerId, input, adminId) {
+      mustExist(customerId)
+      const balance = stores.orders.walletBalance(customerId)
+      if (input.direction === 'debit' && input.amountPaise > balance) throw new AppError(409, 'WALLET_BALANCE_LOW', 'The wallet does not have that much money.', { balancePaise: balance })
+      stores.orders.addWallet({ customerId, type: 'manual_adjustment', direction: input.direction, amountPaise: input.amountPaise, paymentId: null, orderId: null, refundRequestId: null, description: input.reason, createdBy: adminId }, stores.now())
+      return stores.orders.walletBalance(customerId)
+    },
+  }
+  return { repository, refunds }
+}
+
 export function createFakeGateway() {
   const checkouts = new Map<string, { amountPaise: number; state: GatewayState; reportedAmountPaise: number | null; errorCode: string }>()
   const control = { autoComplete: true, createFails: false, statusFails: false, statusCalls: 0, createCalls: 0, webhookAuthorization: 'genuine-phonepe-hash' }
@@ -1243,6 +1365,8 @@ export async function createTestApi(options: { clock?: ReturnType<typeof createC
   const creditService = createCreditService({ repository: creditStore.repository, audit: auditWriter, now: clock.now, payments: paymentService, notifier })
   const adjustmentStore = createFakeAdjustmentRepository({ orders: orderStore, customers: customerAuth.customers, now: clock.now })
   const adjustmentService = createAdjustmentService({ repository: adjustmentStore.repository, audit: auditWriter, now: clock.now, notifier })
+  const walletStore = createFakeWalletRepository({ orders: orderStore, customers: customerAuth.customers, now: clock.now })
+  const walletService = createWalletService({ repository: walletStore.repository, payments: paymentService, audit: auditWriter, notifier, now: clock.now })
   /** The demand a test wants production planning to see. */
   const productionDemand: { rows: DemandRow[]; closings: SlotClosing[] } = { rows: [], closings: [] }
   /** The houses a test wants the rider sheet to see. */
@@ -1303,6 +1427,8 @@ export async function createTestApi(options: { clock?: ReturnType<typeof createC
       router.use('/customer', createCustomerCreditRouter({ auth: customerAuthService, credit: creditService }))
       router.use('/admin/credit-accounts', createAdminCreditRouter({ auth: authService, credit: creditService, allowedOrigins }))
       router.use('/admin/prepaid-adjustments', createAdminAdjustmentRouter({ auth: authService, adjustments: adjustmentService, allowedOrigins }))
+      router.use('/customer/wallet', createCustomerWalletRouter({ auth: customerAuthService, wallet: walletService }))
+      router.use('/admin/wallet', createAdminWalletRouter({ auth: authService, wallet: walletService, allowedOrigins }))
       router.use('/admin/orders', createAdminOrderRouter({ auth: authService, orders: orderService, allowedOrigins }))
       router.use('/admin/customers', createAdminCustomerRouter({ auth: authService, customers: createCustomerService({ repository: createFakeAdminCustomerRepository(customerAuth.customers), addresses: addressStore.repository, audit: auditWriter }), allowedOrigins }))
       router.use('/admin/media', createAdminMediaRouter({ auth: authService, media: mediaService, allowedOrigins }))
@@ -1323,7 +1449,7 @@ export async function createTestApi(options: { clock?: ReturnType<typeof createC
       router.use('/public/offers', createPublicOfferRouter({ offers: offerService }))
       router.use('/public/products', createPublicProductRouter({ products: productService }))
       router.use('/public/categories', createPublicCategoryRouter({ categories: categoryService }))
-      router.use('/admin/categories', createAdminCategoryRouter({ auth: authService, categories: categoryService, allowedOrigins }))
+      router.use('/admin/categories', createAdminCategoryRouter({ auth: authService, categories: categoryService, allowedOrigins, media: mediaService }))
       router.use('/admin/trial-plans', createAdminTrialPlanRouter({ auth: authService, trialPlans: trialPlanService, allowedOrigins }))
       router.use('/admin/subscription-rules', createAdminSubscriptionRuleRouter({ auth: authService, subscriptionRules: subscriptionRuleService, allowedOrigins }))
       router.use('/admin/pin-directory', createAdminPinDirectoryRouter({ auth: authService, directory: createFakePinDirectory(), allowedOrigins }))
@@ -1331,7 +1457,7 @@ export async function createTestApi(options: { clock?: ReturnType<typeof createC
       router.use('/public/banners', createPublicBannerRouter({ banners: bannerService }))
     },
   })
-  return { app, clock, orderService, subscriptions: subscriptionStore, subscriptionService, slotRuleAnswers, payments: paymentStore, phonePe, paymentService, adjustments: adjustmentStore, credit: creditStore, productionDemand, riderStops, orders: orderStore, deliveryAnswers, auth, banners: bannersRepository, media: mediaRepository, onboarding: onboardingRepository, settings: settingsRepository, help: helpRepository, policies: policyRepository, deliverySlots: deliverySlotRepository, cutoffRules: cutoffRuleRepository, serviceAreas: serviceAreaRepository, categories: categoryRepository, trialPlans: trialPlanRepository, subscriptionRules: subscriptionRuleRepository, products: productRepository, storage, audit, sentCodes, customerAuth, addressStore, supportStore, servedPins, sentCustomerCodes, admin, notificationStore, notificationService, dashboardCalls, offerStore }
+  return { app, clock, walletStore, walletService, orderService, subscriptions: subscriptionStore, subscriptionService, slotRuleAnswers, payments: paymentStore, phonePe, paymentService, adjustments: adjustmentStore, credit: creditStore, productionDemand, riderStops, orders: orderStore, deliveryAnswers, auth, banners: bannersRepository, media: mediaRepository, onboarding: onboardingRepository, settings: settingsRepository, help: helpRepository, policies: policyRepository, deliverySlots: deliverySlotRepository, cutoffRules: cutoffRuleRepository, serviceAreas: serviceAreaRepository, categories: categoryRepository, trialPlans: trialPlanRepository, subscriptionRules: subscriptionRuleRepository, products: productRepository, storage, audit, sentCodes, customerAuth, addressStore, supportStore, servedPins, sentCustomerCodes, admin, notificationStore, notificationService, dashboardCalls, offerStore }
 }
 
 export type TestApi = Awaited<ReturnType<typeof createTestApi>>

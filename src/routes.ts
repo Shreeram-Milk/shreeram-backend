@@ -29,6 +29,9 @@ import { createProductionPlanService } from './modules/production-planning/servi
 import { createAdjustmentRepository } from './modules/prepaid-adjustments/repository.js'
 import { createAdminAdjustmentRouter } from './modules/prepaid-adjustments/routes.js'
 import { createAdjustmentService } from './modules/prepaid-adjustments/service.js'
+import { createWalletRepository } from './modules/wallet/repository.js'
+import { createAdminWalletRouter, createCustomerWalletRouter } from './modules/wallet/routes.js'
+import { createWalletService } from './modules/wallet/service.js'
 import { createCreditRepository } from './modules/credit/repository.js'
 import { createAdminCreditRouter, createCustomerCreditRouter } from './modules/credit/routes.js'
 import { createCreditService } from './modules/credit/service.js'
@@ -185,7 +188,7 @@ export function createRoutes({ env, database, sender, customerSender, storage, p
   const deliverySlots = createDeliverySlotService({ repository: createDeliverySlotRepository(database), audit })
   const cutoffRules = createCutoffRuleService({ repository: createCutoffRuleRepository(database), audit })
   const serviceAreas = createServiceAreaService({ repository: createServiceAreaRepository(database), audit })
-  const categories = createCategoryService({ repository: createCategoryRepository(database), audit })
+  const categories = createCategoryService({ repository: createCategoryRepository(database, objectStorage), audit })
   const trialPlans = createTrialPlanService({ repository: createTrialPlanRepository(database), audit })
   const subscriptionRules = createSubscriptionRuleService({ repository: createSubscriptionRuleRepository(database), audit })
   const delivery = createDeliveryBrainService({ repository: createDeliveryBrainRepository(database) })
@@ -207,6 +210,7 @@ export function createRoutes({ env, database, sender, customerSender, storage, p
   })
   const credit = createCreditService({ repository: createCreditRepository(database), audit, payments, notifier })
   const adjustments = createAdjustmentService({ repository: createAdjustmentRepository(database), audit, notifier })
+  const wallet = createWalletService({ repository: createWalletRepository(database), payments, audit, notifier })
   const productionPlans = createProductionPlanService({ repository: createProductionPlanRepository(database), horizonDays: HORIZON_DAYS, jobStatus: () => subscriptions.jobStatus() })
   const customerAddresses = createCustomerAddressService({ repository: createCustomerAddressRepository(database), delivery })
   const supportTickets = createSupportTicketService({ repository: createSupportTicketRepository(database), audit })
@@ -233,6 +237,8 @@ export function createRoutes({ env, database, sender, customerSender, storage, p
     app.use('/customer', createCustomerCreditRouter({ auth: customerAuth, credit }))
     app.use('/admin/credit-accounts', createAdminCreditRouter({ auth, credit, allowedOrigins: env.CORS_ORIGINS }))
     app.use('/admin/prepaid-adjustments', createAdminAdjustmentRouter({ auth, adjustments, allowedOrigins: env.CORS_ORIGINS }))
+    app.use('/customer/wallet', createCustomerWalletRouter({ auth: customerAuth, wallet }))
+    app.use('/admin/wallet', createAdminWalletRouter({ auth, wallet, allowedOrigins: env.CORS_ORIGINS }))
     app.use('/admin/orders', createAdminOrderRouter({ auth, orders, allowedOrigins: env.CORS_ORIGINS }))
     app.use('/customer/support', createCustomerSupportRouter({ auth: customerAuth, tickets: supportTickets }))
     app.use('/admin/support-tickets', createAdminSupportRouter({ auth, tickets: supportTickets, allowedOrigins: env.CORS_ORIGINS }))
@@ -253,7 +259,7 @@ export function createRoutes({ env, database, sender, customerSender, storage, p
     app.use('/admin/products', createAdminProductRouter({ auth, products, allowedOrigins: env.CORS_ORIGINS }))
     app.use('/public/products', createPublicProductRouter({ products }))
     app.use('/public/categories', createPublicCategoryRouter({ categories }))
-    app.use('/admin/categories', createAdminCategoryRouter({ auth, categories, allowedOrigins: env.CORS_ORIGINS }))
+    app.use('/admin/categories', createAdminCategoryRouter({ auth, categories, allowedOrigins: env.CORS_ORIGINS, media }))
     app.use('/admin/trial-plans', createAdminTrialPlanRouter({ auth, trialPlans, allowedOrigins: env.CORS_ORIGINS }))
     app.use('/admin/subscription-rules', createAdminSubscriptionRuleRouter({ auth, subscriptionRules, allowedOrigins: env.CORS_ORIGINS }))
     app.use('/public/delivery', createPublicDeliveryRouter({ delivery }))

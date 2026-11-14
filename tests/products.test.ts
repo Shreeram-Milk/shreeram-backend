@@ -240,7 +240,17 @@ describe('the customer catalogue (public)', () => {
     await send(api, ids.cookie, 'patch', `/admin/categories/${hidden}/status`, { status: 'inactive' })
     const response = await request(api.app).get('/public/categories')
     expect(response.body.categories.map((item: { name: string }) => item.name)).toEqual(['Milk', 'Curd'])
-    expect(Object.keys(response.body.categories[0]).sort()).toEqual(['description', 'id', 'name', 'nameGu', 'sortOrder'])
+    expect(Object.keys(response.body.categories[0]).sort()).toEqual(['description', 'id', 'imageUrl', 'name', 'nameGu', 'sortOrder'])
+  })
+
+  it('refuses a category picture that was not uploaded for a category or has not finished uploading', async () => {
+    const api = await createTestApi()
+    const ids = await setup(api)
+    const refused = await send(api, ids.cookie, 'post', '/admin/categories', { name: 'Paneer', imageAssetId: '00000000-0000-4000-8000-000000000000' })
+    expect(refused.status).toBe(400)
+    expect(refused.body.error.details).toEqual([{ field: 'imageAssetId', message: 'That picture has not finished uploading. Upload it again.' }])
+    const saved = await send(api, ids.cookie, 'post', '/admin/categories', { name: 'Paneer' })
+    expect(saved.body.category).toMatchObject({ name: 'Paneer', imageAssetId: null })
   })
 })
 

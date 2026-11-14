@@ -5,6 +5,8 @@ import { AppError } from '../../http/errors.js'
 import { likePattern } from '../master-data/shared.js'
 import { lockOffer } from '../offers/redemption.js'
 import type { DeliveryMethod } from '../products/schema.js'
+import { addWalletEntry, walletBalance } from '../wallet/ledger.js'
+import { walletEnabled } from '../wallet/rules.js'
 import type { AdminOrderListQuery, CustomerOrderListQuery, OrderSource } from './schema.js'
 import { canReturnMoney, canTransition, customerCanCancel, releasesMoney, withinCreditLimit, type CheckoutVariant, type OrderStatus } from './rules.js'
 
@@ -27,7 +29,7 @@ export type OrderView = {
   subtotalPaise: number; discountPaise: number; totalPaise: number
   /** The offer that took money off or gave a gift, as it was named when the order was placed ('' when none). */
   offerTitle: string; offerTitleGu: string
-  paymentMethod: 'credit' | 'online'; paymentStatus: 'unpaid' | 'paid' | 'partially_refunded' | 'refunded'
+  paymentMethod: 'credit' | 'online' | 'wallet'; paymentStatus: 'unpaid' | 'paid' | 'partially_refunded' | 'refunded'
   placedAt: string; cancelledAt: string | null; cancelReason: string
   items: OrderItemView[]
   /** Set when the order is one delivery of a subscription or trial. */
@@ -66,7 +68,7 @@ export type NewOrder = {
   /** Only the name of an offer already recorded elsewhere (a subscription's offer), shown on each delivery. */
   offerLabel?: { title: string; titleGu: string }
   /** Credit adds to what the customer owes; online orders are written only once their payment is confirmed, and point at that payment. */
-  payment: { method: 'credit' } | { method: 'online' }
+  payment: { method: 'credit' } | { method: 'online' } | { method: 'wallet' }
   /** One delivery of a subscription or trial: the subscription and the slot line it belongs to. */
   subscription?: { id: string; lineId: string }
 }
@@ -182,6 +184,14 @@ export async function insertOrders(client: PoolClient, customerId: string, order
     if (!withinCreditLimit(limit, owed, creditTotal)) throw new AppError(409, 'CREDIT_LIMIT_EXCEEDED', 'This order is above your credit limit.', { limitPaise: limit, owedPaise: owed, neededPaise: creditTotal })
   }
 
+  // Paid from the wallet: under the same customer lock, so two checkouts at once can never spend the same money.
+  const walletTotal = orders.filter(order => order.payment.method === 'wallet').reduce((sum, order) => sum + order.totalPaise, 0)
+  if (walletTotal > 0) {
+    if (!walletEnabled({ customerType: String(customer.customer_type), status: String(customer.status) })) throw new AppError(409, 'WALLET_NOT_AVAILABLE', 'The wallet is not available on this account.')
+    const balance = await walletBalance(client, customerId)
+    if (balance < walletTotal) throw new AppError(409, 'WALLET_BALANCE_LOW', 'Your wallet does not have enough money for this order.', { balancePaise: balance, neededPaise: walletTotal })
+  }
+
   // The offer is checked again under a lock on its row: two checkouts at once cannot both take the last use.
   const offerRef = orders.find(order => order.offer)?.offer
   const reward = offerRef ? await lockOffer(client, customerId, offerRef) : { rewardCardId: null }
@@ -197,7 +207,7 @@ export async function insertOrders(client: PoolClient, customerId: string, order
        values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $25, $11, $12, $13, $14, $15, $16, $17, $18, $19, $26, $20, $21, $22, $23, $24, $24, $27, $28, $29) returning id`,
       [customerId, order.idempotencyKey, order.deliveryMethod, order.serviceAreaId, order.deliveryDate, order.slot?.id ?? null, order.slot?.name ?? '', order.slot?.startTime ?? null, order.slot?.endTime ?? null, order.orderBy,
         order.recipientName, order.recipientPhone, order.addressLine1, order.addressLine2, order.landmark, order.city, order.pinCode, order.doorstepNote,
-        order.subtotalPaise, order.totalPaise, order.payment.method, order.payment.method === 'online' ? 'paid' : 'unpaid', paymentId, now, order.cancelBy,
+        order.subtotalPaise, order.totalPaise, order.payment.method, order.payment.method === 'credit' ? 'unpaid' : 'paid', paymentId, now, order.cancelBy,
         order.discountPaise ?? 0, order.offer?.id ?? null, order.offer?.title ?? order.offerLabel?.title ?? '', order.offer?.titleGu ?? order.offerLabel?.titleGu ?? ''],
     )
     const orderId = String((rows[0] as Row).id)
@@ -219,6 +229,9 @@ export async function insertOrders(client: PoolClient, customerId: string, order
     }
     if (order.subscription) await client.query('update orders set subscription_id = $2, subscription_line_id = $3 where id = $1', [orderId, order.subscription.id, order.subscription.lineId])
     await client.query("insert into order_status_history (order_id, from_status, to_status, changed_by_customer) values ($1, null, 'placed', true)", [orderId])
+    if (order.payment.method === 'wallet') {
+      await addWalletEntry(client, { customerId, type: 'order_payment', direction: 'debit', amountPaise: order.totalPaise, orderId, description: 'Order paid from wallet' })
+    }
     if (order.payment.method === 'credit') {
       await client.query(
         "insert into credit_ledger_entries (customer_id, entry_type, direction, amount_paise, order_id, description, occurred_on, created_at) values ($1, 'order_charge', 'debit', $2, $3, 'Order placed', (now() at time zone 'Asia/Kolkata')::date, clock_timestamp())",
@@ -412,6 +425,10 @@ export function createOrderRepository(database: Database): OrderRepository {
             "insert into credit_ledger_entries (customer_id, entry_type, direction, amount_paise, order_id, description, created_by, occurred_on, created_at) values ($1, 'order_refund', 'credit', $2, $3, $4, $5, (now() at time zone 'Asia/Kolkata')::date, clock_timestamp())",
             [order.customer_id, total, orderId, `Order ${String(order.order_number)} ${to}`, adminId],
           )
+        } else if (order.payment_method === 'wallet' && order.payment_status === 'paid' && !subscriptionDelivery) {
+          // Paid from the wallet: the money goes straight back into it, once.
+          await addWalletEntry(client, { customerId: String(order.customer_id), type: 'order_return', direction: 'credit', amountPaise: total, orderId, description: `Order ${String(order.order_number)} ${to}`, createdBy: adminId })
+          await client.query("update orders set payment_status = 'refunded', updated_at = now() where id = $1", [orderId])
         } else if (order.payment_status === 'paid' && !subscriptionDelivery) {
           await client.query(
             `insert into prepaid_adjustments (customer_id, order_id, adjustment_type, status, amount_paise, reason, effective_date, dedupe_key, created_by)
@@ -435,6 +452,9 @@ export function createOrderRepository(database: Database): OrderRepository {
           "insert into credit_ledger_entries (customer_id, entry_type, direction, amount_paise, order_id, description, created_by, occurred_on, created_at) values ($1, 'order_refund', 'credit', $2, $3, $4, $5, (now() at time zone 'Asia/Kolkata')::date, clock_timestamp())",
           [order.customer_id, total, orderId, `Order ${String(order.order_number)}: credited by staff (${reason})`.slice(0, 300), adminId],
         )
+      } else if (order.payment_method === 'wallet' && order.payment_status === 'paid') {
+        await addWalletEntry(client, { customerId: String(order.customer_id), type: 'order_return', direction: 'credit', amountPaise: total, orderId, description: `Order ${String(order.order_number)}: ${reason}`, createdBy: adminId })
+        await client.query("update orders set payment_status = 'refunded' where id = $1", [orderId])
       } else if (order.payment_status === 'paid' || order.payment_status === 'partially_refunded') {
         await client.query(
           `insert into prepaid_adjustments (customer_id, order_id, payment_id, adjustment_type, status, amount_paise, reason, effective_date, dedupe_key, created_by)

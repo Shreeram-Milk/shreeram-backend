@@ -10,7 +10,7 @@ type Dependencies = { repository: MediaRepository; storage: ObjectStorage; audit
 type Actor = { adminId: string; ip: string | null }
 
 const EXTENSIONS: Record<ImageType, string> = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp', 'image/svg+xml': 'svg' }
-const FOLDERS: Record<MediaPurpose, string> = { banner: 'banners', banner_icon: 'banner-icons', onboarding: 'onboarding', product: 'products', offer: 'offers' }
+const FOLDERS: Record<MediaPurpose, string> = { banner: 'banners', banner_icon: 'banner-icons', onboarding: 'onboarding', product: 'products', offer: 'offers', category: 'categories' }
 
 /** Random keys in a folder per purpose and month: `banners/2026/10/<uuid>.webp`. A name chosen by a user never reaches the path. */
 export function objectKeyFor(purpose: MediaPurpose, contentType: ImageType, at: Date): string {

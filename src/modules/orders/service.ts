@@ -266,7 +266,7 @@ export function createOrderService({ repository, addresses, delivery, audit, pay
         })()),
         subtotalPaise: planned.subtotalPaise, totalPaise: planned.totalPaise, discountPaise: planned.discountPaise,
         ...(quote.offer ? { offer: { id: quote.offer.id, title: quote.offer.title, titleGu: quote.offer.titleGu, checkoutKey: keyPrefix } } : {}),
-        payment: planned.payment === 'online' ? { method: 'online' } : { method: 'credit' },
+        payment: planned.payment === 'credit' ? { method: 'credit' } : input.payWith === 'wallet' ? { method: 'wallet' } : { method: 'online' },
       }
     })
     const onlinePaise = orders.filter(order => order.payment.method === 'online').reduce((sum, order) => sum + order.totalPaise, 0)

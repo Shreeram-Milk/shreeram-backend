@@ -2,9 +2,10 @@ import { z } from 'zod'
 
 /**
  * `banner` is a promotion photo, `banner_icon` is the small SVG on a Maintenance or Information notice,
- * `onboarding` is a picture on a first-run introduction slide, `product` is a photo of something you sell, `offer` is the top picture of an offer page.
+ * `onboarding` is a picture on a first-run introduction slide, `product` is a photo of something you sell, `offer` is the top picture of an offer page,
+ * `category` is the picture on a category tile.
  */
-export const MEDIA_PURPOSES = ['banner', 'banner_icon', 'onboarding', 'product', 'offer'] as const
+export const MEDIA_PURPOSES = ['banner', 'banner_icon', 'onboarding', 'product', 'offer', 'category'] as const
 export const IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/webp', 'image/svg+xml'] as const
 
 export type MediaPurpose = (typeof MEDIA_PURPOSES)[number]
@@ -19,6 +20,7 @@ export const MEDIA_RULES: Record<MediaPurpose, { types: readonly ImageType[]; ma
   product: { types: PHOTO_TYPES, maxBytes: 2 * KB * KB, typeMessage: 'Use a JPEG, PNG or WebP picture.', sizeMessage: 'Keep the picture under 2 MB.' },
   onboarding: { types: PHOTO_TYPES, maxBytes: 2 * KB * KB, typeMessage: 'Use a JPEG, PNG or WebP picture.', sizeMessage: 'Keep the picture under 2 MB.' },
   offer: { types: PHOTO_TYPES, maxBytes: 2 * KB * KB, typeMessage: 'Use a JPEG, PNG or WebP picture.', sizeMessage: 'Keep the picture under 2 MB.' },
+  category: { types: PHOTO_TYPES, maxBytes: 1 * KB * KB, typeMessage: 'Use a JPEG, PNG or WebP picture.', sizeMessage: 'Keep the picture under 1 MB.' },
   banner_icon: { types: ['image/svg+xml'], maxBytes: 100 * KB, typeMessage: 'Icons must be SVG files.', sizeMessage: 'Keep the icon under 100 KB.' },
 }
 
